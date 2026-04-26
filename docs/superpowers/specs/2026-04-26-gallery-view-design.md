@@ -174,7 +174,6 @@ user-controllable sort in v1.
 gallery-view/
 ├── pyproject.toml
 ├── README.md
-├── LICENSE                       # MIT — confirm with Hongquan before commit
 ├── .github/workflows/ci.yml
 ├── src/gallery_view/
 │   ├── __init__.py               # __version__
