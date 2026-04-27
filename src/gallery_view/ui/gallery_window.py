@@ -40,8 +40,9 @@ class Source:
 
 @dataclass
 class RowKey:
-    """A row in the gallery: (acq_id, fov)."""
+    """A row in the gallery: (acq_id, timepoint, fov)."""
     acq_id: int
+    timepoint: str
     fov: str
 
 
@@ -54,6 +55,7 @@ class RowWidgets:
     thumb_labels: "dict[int, QLabel]"   # ch_idx -> data thumb
     thumb_columns: "dict[str, QLabel]"  # wavelength -> the cell currently rendered (data or placeholder)
     fov_combo: "QComboBox | None"
+    time_combo: "QComboBox | None"
 
 
 class GalleryWindow(QMainWindow):
@@ -77,12 +79,12 @@ class GalleryWindow(QMainWindow):
         self.acquisitions: list[Acquisition | None] = []
         self.sources: list[Source] = []
         self.row_keys: list[RowKey] = []
-        self.row_widgets: dict[tuple[int, str], RowWidgets] = {}
+        self.row_widgets: dict[tuple[int, str, str], RowWidgets] = {}
         self.source_groups: list[QGroupBox] = []
         self.expanded_fov_mode: bool = False
         self.square_footprint: bool = False
-        # (acq_id, fov, ch_idx, axis) -> AxisMip
-        self.mip_data: dict[tuple[int, str, int, str], "AxisMip"] = {}
+        # (acq_id, timepoint, fov, ch_idx, axis) -> AxisMip
+        self.mip_data: dict[tuple[int, str, str, int, str], "AxisMip"] = {}
 
         # Loader thread (long-lived)
         self.loader = MipLoader()
@@ -275,10 +277,10 @@ class GalleryWindow(QMainWindow):
     def _set_square_footprint(self, checked: bool) -> None:
         self.square_footprint = checked
         self._apply_label_sizes()
-        for (acq_id, fov, ch_idx, axis), ax_mip in self.mip_data.items():
+        for (acq_id, t, fov, ch_idx, axis), ax_mip in self.mip_data.items():
             if axis != self.view_axis:
                 continue
-            self._render_thumb(acq_id, fov, ch_idx, ax_mip)
+            self._render_thumb(acq_id, t, fov, ch_idx, ax_mip)
 
     def _set_expanded_fov_mode(self, checked: bool) -> None:
         self.expanded_fov_mode = checked
@@ -327,7 +329,9 @@ class GalleryWindow(QMainWindow):
         self._rebuild_mag_filter()
         self._rebuild_rows()
         for acq_id, acq in zip(ids, new_acqs):
-            self._enqueue_jobs_for_acq(acq_id, acq, acq.selected_fov)
+            self._enqueue_jobs_for_acq(
+                acq_id, acq, acq.selected_timepoint, acq.selected_fov
+            )
 
     def _remove_source(self, path: str) -> None:
         target = next((s for s in self.sources if s.path == path), None)
@@ -348,10 +352,15 @@ class GalleryWindow(QMainWindow):
     def _sync_sources_panel(self) -> None:
         self.sources_panel.set_sources([(s.path, len(s.acq_ids)) for s in self.sources])
 
-    def _enqueue_jobs_for_acq(self, acq_id: int, acq: Acquisition, fov: str) -> None:
+    def _enqueue_jobs_for_acq(
+        self, acq_id: int, acq: Acquisition, timepoint: str, fov: str,
+    ) -> None:
         for ch_idx, channel in enumerate(acq.channels):
             self.loader.enqueue(
-                Job(acq_id=acq_id, acq=acq, fov=fov, channel=channel, ch_idx=ch_idx)
+                Job(
+                    acq_id=acq_id, acq=acq, fov=fov, channel=channel,
+                    ch_idx=ch_idx, timepoint=timepoint,
+                )
             )
 
     # ── stub hooks filled in by later tasks ──
@@ -470,10 +479,10 @@ class GalleryWindow(QMainWindow):
             insert_at += 1
 
         # Re-render any thumbs we already have data for
-        for (acq_id, fov, ch_idx, axis), ax_mip in list(self.mip_data.items()):
+        for (acq_id, t, fov, ch_idx, axis), ax_mip in list(self.mip_data.items()):
             if axis != self.view_axis:
                 continue
-            self._render_thumb(acq_id, fov, ch_idx, ax_mip)
+            self._render_thumb(acq_id, t, fov, ch_idx, ax_mip)
 
         self._refresh_visibility()
         self._apply_label_sizes()
@@ -503,11 +512,12 @@ class GalleryWindow(QMainWindow):
             acq = self.acquisitions[acq_id]
             if acq is None:
                 continue
+            t = acq.selected_timepoint
             for fov in self._fovs_for_row(acq_id):
-                key = RowKey(acq_id, fov)
+                key = RowKey(acq_id, t, fov)
                 self.row_keys.append(key)
                 row = self._make_row_widget(key, acq, active_wls)
-                self.row_widgets[(acq_id, fov)] = row
+                self.row_widgets[(acq_id, t, fov)] = row
                 group_layout.addWidget(row.container)
 
         return group
@@ -599,6 +609,18 @@ class GalleryWindow(QMainWindow):
 
         h.addStretch()
 
+        # Time picker (only for multi-timepoint acquisitions)
+        time_combo: QComboBox | None = None
+        if len(acq.timepoints) > 1:
+            time_combo = QComboBox()
+            for t in acq.timepoints:
+                time_combo.addItem(f"t={t}", t)
+            time_combo.setCurrentIndex(acq.timepoints.index(acq.selected_timepoint))
+            time_combo.currentIndexChanged.connect(
+                lambda i, k=key, c=time_combo: self._on_timepoint_changed(k, c.itemData(i))
+            )
+            h.addWidget(time_combo)
+
         # FOV picker (default mode only)
         fov_combo: QComboBox | None = None
         if not self.expanded_fov_mode and len(acq.fovs) > 1:
@@ -647,6 +669,7 @@ class GalleryWindow(QMainWindow):
             thumb_labels=thumb_labels,
             thumb_columns=thumb_columns,
             fov_combo=fov_combo,
+            time_combo=time_combo,
         )
 
     def _on_fov_changed(self, key, new_fov: str) -> None:
@@ -655,7 +678,19 @@ class GalleryWindow(QMainWindow):
         # Re-key the row widget; the easiest is to rebuild rows since rows are cheap
         self._rebuild_rows()
         # Enqueue jobs for the new FOV's channels (cache-aware; loader will skip cached)
-        self._enqueue_jobs_for_acq(key.acq_id, acq, new_fov)
+        self._enqueue_jobs_for_acq(
+            key.acq_id, acq, acq.selected_timepoint, new_fov
+        )
+
+    def _on_timepoint_changed(self, key, new_timepoint: str) -> None:
+        acq = self.acquisitions[key.acq_id]
+        acq.selected_timepoint = new_timepoint
+        # Re-key the row widget; rows are cheap, rebuild.
+        self._rebuild_rows()
+        # Enqueue jobs for the new (timepoint, fov)'s channels.
+        self._enqueue_jobs_for_acq(
+            key.acq_id, acq, new_timepoint, acq.selected_fov
+        )
 
     # ── physical aspect and label sizing ──
 
@@ -687,22 +722,22 @@ class GalleryWindow(QMainWindow):
         return self.thumb_size, max(20, int(round(self.thumb_size * aspect)))
 
     def _apply_label_sizes(self) -> None:
-        for (acq_id, fov), rw in self.row_widgets.items():
-            self._apply_label_sizes_for(acq_id, fov, rw)
+        for (acq_id, timepoint, fov), rw in self.row_widgets.items():
+            self._apply_label_sizes_for(acq_id, timepoint, fov, rw)
 
-    def _apply_label_sizes_for(self, acq_id, fov, rw=None) -> None:
+    def _apply_label_sizes_for(self, acq_id, timepoint, fov, rw=None) -> None:
         """Resize thumb cells in one row only — used when shape_zyx becomes
         known and only that row's aspect changes."""
         if rw is None:
-            rw = self.row_widgets.get((acq_id, fov))
+            rw = self.row_widgets.get((acq_id, timepoint, fov))
             if rw is None:
                 return
         w, h = self._row_label_size(acq_id, fov)
         for thumb in rw.thumb_columns.values():
             thumb.setFixedSize(w, h)
 
-    def _render_thumb(self, acq_id, fov, ch_idx, ax_mip) -> None:
-        rw = self.row_widgets.get((acq_id, fov))
+    def _render_thumb(self, acq_id, timepoint, fov, ch_idx, ax_mip) -> None:
+        rw = self.row_widgets.get((acq_id, timepoint, fov))
         if rw is None or ch_idx not in rw.thumb_labels:
             return
         acq = self.acquisitions[acq_id]
@@ -721,7 +756,9 @@ class GalleryWindow(QMainWindow):
 
     # ── loader callbacks ──
 
-    def _on_mip_ready(self, acq_id, fov, ch_idx, wavelength, channel_mips, shape) -> None:
+    def _on_mip_ready(
+        self, acq_id, timepoint, fov, ch_idx, wavelength, channel_mips, shape,
+    ) -> None:
         if acq_id >= len(self.acquisitions) or self.acquisitions[acq_id] is None:
             return
         acq = self.acquisitions[acq_id]
@@ -729,12 +766,14 @@ class GalleryWindow(QMainWindow):
         if shape is not None and shape_was_unknown:
             acq.shape_zyx = shape
         for axis, ax_mip in channel_mips.items():
-            self.mip_data[(acq_id, fov, ch_idx, axis)] = ax_mip
+            self.mip_data[(acq_id, timepoint, fov, ch_idx, axis)] = ax_mip
         if self.view_axis in channel_mips:
-            self._render_thumb(acq_id, fov, ch_idx, channel_mips[self.view_axis])
+            self._render_thumb(
+                acq_id, timepoint, fov, ch_idx, channel_mips[self.view_axis]
+            )
         # Aspect may have become known for this row; resize only this row.
         if shape_was_unknown and acq.shape_zyx is not None:
-            self._apply_label_sizes_for(acq_id, fov)
+            self._apply_label_sizes_for(acq_id, timepoint, fov)
 
     def _on_progress(self, done, queued, message) -> None:
         self.status.setText(f"{done}/{queued} channels — {message}")
@@ -750,18 +789,18 @@ class GalleryWindow(QMainWindow):
             return
         self.view_axis = axis
         self._apply_label_sizes()
-        for (acq_id, fov, ch_idx, ax), ax_mip in self.mip_data.items():
+        for (acq_id, t, fov, ch_idx, ax), ax_mip in self.mip_data.items():
             if ax != axis:
                 continue
-            self._render_thumb(acq_id, fov, ch_idx, ax_mip)
+            self._render_thumb(acq_id, t, fov, ch_idx, ax_mip)
 
     def _set_thumb_size(self, size: int) -> None:
         self.thumb_size = size
         self._apply_label_sizes()
-        for (acq_id, fov, ch_idx, axis), ax_mip in self.mip_data.items():
+        for (acq_id, t, fov, ch_idx, axis), ax_mip in self.mip_data.items():
             if axis != self.view_axis:
                 continue
-            self._render_thumb(acq_id, fov, ch_idx, ax_mip)
+            self._render_thumb(acq_id, t, fov, ch_idx, ax_mip)
 
     def _open_napari(self, key) -> None:
         from .viewer3d import open_napari
@@ -770,7 +809,9 @@ class GalleryWindow(QMainWindow):
 
         def lut_lookup(ch_idx, axis):
             ax = self.view_axis if axis == "current" else axis
-            entry = self.mip_data.get((key.acq_id, key.fov, ch_idx, ax))
+            entry = self.mip_data.get(
+                (key.acq_id, key.timepoint, key.fov, ch_idx, ax)
+            )
             if entry is None:
                 return None
             return float(entry.p1), float(entry.p999)
@@ -782,13 +823,14 @@ class GalleryWindow(QMainWindow):
 
         acq = self.acquisitions[key.acq_id]
 
-        def refresh(acq_id, fov, ch_idx, ax_mip):
-            self._render_thumb(acq_id, fov, ch_idx, ax_mip)
+        def refresh(acq_id, timepoint, fov, ch_idx, ax_mip):
+            self._render_thumb(acq_id, timepoint, fov, ch_idx, ax_mip)
 
         show_lut_dialog(
             parent=self,
             acq=acq,
             fov=key.fov,
+            timepoint=key.timepoint,
             axis=self.view_axis,
             mip_data=self.mip_data,
             refresh_thumb=refresh,

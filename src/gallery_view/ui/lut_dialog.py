@@ -36,30 +36,32 @@ def show_lut_dialog(
     parent,
     acq: Acquisition,
     fov: str,
+    timepoint: str,
     axis: str,
     mip_data: dict,
-    refresh_thumb: Callable[[int, str, int, AxisMip], None],
+    refresh_thumb: Callable[[int, str, str, int, AxisMip], None],
     acq_id: int,
 ) -> None:
     """Open the LUT dialog. ``mip_data`` is the gallery window's
-    ``{(acq_id, fov, ch_idx, axis): AxisMip}`` map; we mutate it in place.
-    ``refresh_thumb(acq_id, fov, ch_idx, ax_mip)`` is called whenever a
-    channel's LUT changes so the gallery thumbnail re-renders."""
+    ``{(acq_id, timepoint, fov, ch_idx, axis): AxisMip}`` map; we mutate
+    it in place. ``refresh_thumb(acq_id, timepoint, fov, ch_idx, ax_mip)``
+    is called whenever a channel's LUT changes so the gallery thumbnail
+    re-renders."""
 
     ch_keys = sorted(
-        ci for (a, f, ci, ax) in mip_data
-        if a == acq_id and f == fov and ax == axis
+        ci for (a, t, f, ci, ax) in mip_data
+        if a == acq_id and t == timepoint and f == fov and ax == axis
     )
     if not ch_keys:
         return
 
     axis_label = {"z": "Z (XY)", "y": "Y (XZ)", "x": "X (YZ)"}[axis]
-    snapshot: dict[tuple[int, str, int, str], tuple[float, float]] = {}
+    snapshot: dict[tuple[int, str, str, int, str], tuple[float, float]] = {}
     for ci in ch_keys:
         for ax in AXES:
-            entry = mip_data.get((acq_id, fov, ci, ax))
+            entry = mip_data.get((acq_id, timepoint, fov, ci, ax))
             if entry is not None:
-                snapshot[(acq_id, fov, ci, ax)] = (entry.p1, entry.p999)
+                snapshot[(acq_id, timepoint, fov, ci, ax)] = (entry.p1, entry.p999)
 
     dlg = QDialog(parent)
     mag = parse_mag(acq.folder_name) or "?"
@@ -74,9 +76,9 @@ def show_lut_dialog(
             if entry is None:
                 continue
             mip_data[k] = AxisMip(mip=entry.mip, p1=p1, p999=p999)
-            _, _, ch_idx, ax = k
+            _, _, _, ch_idx, ax = k
             if ax == axis:
-                refresh_thumb(acq_id, fov, ch_idx, mip_data[k])
+                refresh_thumb(acq_id, timepoint, fov, ch_idx, mip_data[k])
 
     dlg.rejected.connect(revert_unsaved)
 
@@ -95,7 +97,7 @@ def show_lut_dialog(
     min_slider_targets: list[tuple[QSlider, int]] = []
 
     for ch_idx in ch_keys:
-        ax_mip = mip_data[(acq_id, fov, ch_idx, axis)]
+        ax_mip = mip_data[(acq_id, timepoint, fov, ch_idx, axis)]
         wl = acq.channels[ch_idx].wavelength
         color = rgb_for(wl)
         data_min, data_max = float(ax_mip.mip.min()), float(ax_mip.mip.max())
@@ -168,12 +170,15 @@ def show_lut_dialog(
                 rfn(float(lo), float(hi))
                 # Apply to all three axes (synchronized)
                 for ax in AXES:
-                    key = (acq_id, fov, ci, ax)
+                    key = (acq_id, timepoint, fov, ci, ax)
                     entry = mip_data.get(key)
                     if entry is None:
                         continue
                     mip_data[key] = AxisMip(mip=entry.mip, p1=float(lo), p999=float(hi))
-                refresh_thumb(acq_id, fov, ci, mip_data[(acq_id, fov, ci, axis)])
+                refresh_thumb(
+                    acq_id, timepoint, fov, ci,
+                    mip_data[(acq_id, timepoint, fov, ci, axis)],
+                )
             return on_change
 
         handler = make_handler(sl_min, sl_max, val_lbl, render_fn, ch_idx)
@@ -201,7 +206,10 @@ def show_lut_dialog(
     btn_export.setFixedHeight(30)
     btn_export.setStyleSheet(btn_min_reset.styleSheet())
     btn_export.clicked.connect(
-        lambda: _export_png(dlg, acq, fov, axis, axis_label, ch_keys, mip_data, acq_id, dz_um, pixel_um)
+        lambda: _export_png(
+            dlg, acq, fov, timepoint, axis, axis_label, ch_keys,
+            mip_data, acq_id, dz_um, pixel_um,
+        )
     )
     bottom.addWidget(btn_export)
     bottom.addStretch()
@@ -218,11 +226,11 @@ def show_lut_dialog(
         for ci in ch_keys:
             channel = acq.channels[ci]
             src, ch_id = acq.handler.cache_key(
-                acq, fov, channel, timepoint=acq.selected_timepoint
+                acq, fov, channel, timepoint=timepoint
             )
             axis_data = {}
             for ax in AXES:
-                entry = mip_data.get((acq_id, fov, ci, ax))
+                entry = mip_data.get((acq_id, timepoint, fov, ci, ax))
                 if entry is None:
                     continue
                 axis_data[ax] = (entry.mip, entry.p1, entry.p999)
@@ -242,7 +250,8 @@ def show_lut_dialog(
 
 
 def _export_png(
-    dlg, acq, fov, axis, axis_label, ch_keys, mip_data, acq_id, dz_um, pixel_um
+    dlg, acq, fov, timepoint, axis, axis_label, ch_keys, mip_data, acq_id,
+    dz_um, pixel_um,
 ) -> None:
     try:
         import matplotlib
@@ -280,7 +289,7 @@ def _export_png(
     text_pad_pt = 60 * 72 / EXPORT_DPI
 
     for col_i, ci in enumerate(ch_keys):
-        entry = mip_data.get((acq_id, fov, ci, axis))
+        entry = mip_data.get((acq_id, timepoint, fov, ci, axis))
         if entry is None:
             continue
         wl = acq.channels[ci].wavelength

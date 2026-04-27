@@ -26,8 +26,8 @@ class Job:
 
 
 class MipLoader(QThread):
-    # acq_id, fov, ch_idx, wavelength, channel_mips, shape_zyx
-    mip_ready = Signal(int, str, int, str, object, object)
+    # acq_id, timepoint, fov, ch_idx, wavelength, channel_mips, shape_zyx
+    mip_ready = Signal(int, str, str, int, str, object, object)
     # done_total, queued_total, message
     progress = Signal(int, int, str)
     idle = Signal()
@@ -146,7 +146,7 @@ class MipLoader(QThread):
         self, job: Job, channel_mips: ChannelMips, shape: ShapeZYX | None
     ) -> None:
         self.mip_ready.emit(
-            job.acq_id, job.fov, job.ch_idx,
+            job.acq_id, job.timepoint, job.fov, job.ch_idx,
             job.channel.wavelength, channel_mips, shape,
         )
 
