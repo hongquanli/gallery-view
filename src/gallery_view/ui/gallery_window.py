@@ -661,11 +661,19 @@ class GalleryWindow(QMainWindow):
                 continue
             self._render_thumb(acq_id, fov, ch_idx, ax_mip)
 
-    # ── temporary stubs (filled in by Tasks 22-23) ──
-
     def _open_napari(self, key) -> None:
-        from qtpy.QtWidgets import QMessageBox
-        QMessageBox.information(self, "Coming soon", "3D viewer wiring in Task 23")
+        from .viewer3d import open_napari
+
+        acq = self.acquisitions[key.acq_id]
+
+        def lut_lookup(ch_idx, axis):
+            ax = self.view_axis if axis == "current" else axis
+            entry = self.mip_data.get((key.acq_id, key.fov, ch_idx, ax))
+            if entry is None:
+                return None
+            return float(entry.p1), float(entry.p999)
+
+        open_napari(acq, key.fov, lut_lookup)
 
     def _adjust_lut(self, key) -> None:
         from .lut_dialog import show_lut_dialog
