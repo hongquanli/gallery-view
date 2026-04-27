@@ -1,4 +1,4 @@
-# Adopt squid's per-image TIFF layout (and rename `multi_channel_tiff` → `individual_tiff`)
+# Adopt squid's per-image TIFF layout (and rename `multi_channel_tiff` → `single_tiff`)
 
 Status: approved (brainstorm)
 Date: 2026-04-27
@@ -7,16 +7,16 @@ Date: 2026-04-27
 
 Two changes shipped together:
 
-1. **Drop `SingleChannelTiffHandler`.** The AION single-channel-per-folder format is no longer in scope; the handler, its tests, its conftest fixture, and the README mention are removed. Folders that previously matched it now either go unmatched or fall through to the renamed `individual_tiff` handler if their filenames happen to fit the legacy `current_<fov>_<z>_<channel>.tiff` shape.
+1. **Drop `SingleChannelTiffHandler`.** The AION single-channel-per-folder format is no longer in scope; the handler, its tests, its conftest fixture, and the README mention are removed. Folders that previously matched it now either go unmatched or fall through to the renamed `single_tiff` handler if their filenames happen to fit the legacy `current_<fov>_<z>_<channel>.tiff` shape.
 
-2. **Rename `MultiChannelTiffHandler` → `IndividualTiffHandler` and teach it the squid layout.** The handler now recognises `<acq>/<t>/<region>_<fov>_<z>_<channel>.tiff` (with an optional `<well>_` prefix) in addition to the legacy `<acq>/0/current_<fov>_<z>_<channel>.tiff`, gains explicit timepoint awareness, and reports composite `<region>_<fov>` FOV identifiers. The gallery row UI gains a Time combo (hidden when a single timepoint is present).
+2. **Rename `MultiChannelTiffHandler` → `SingleTiffHandler` and teach it the squid layout.** The handler now recognises `<acq>/<t>/<region>_<fov>_<z>_<channel>.tiff` (where `<region>` is any non-underscore string — a numeric region id, a well like `A1`, or anything else squid emits) in addition to the legacy `<acq>/0/current_<fov>_<z>_<channel>.tiff`, gains explicit timepoint awareness, and reports composite `<region>_<fov>` FOV identifiers. The format name (`single_tiff`) and filename regex match `cephla-lab/ndviewer_light` for ecosystem consistency. The gallery row UI gains a Time combo (hidden when a single timepoint is present).
 
 OME-Zarr is **out of scope** for this design — squid's three zarr modes (HCS, per-FOV, 6D) warrant their own brainstorm with a concrete dataset in hand.
 
 ## Why
 
 - Real squid output uses the new filename layout (`{file_id}_{channel}.tiff` where `file_id = "<region>_<fov>_<z>"`, optionally prefixed with the well). Gallery-view currently only reads the older `current_…` form, so it can't open recent acquisitions without renaming on disk.
-- `multi_channel_tiff` was a misleading name — there is one TIFF per `(z, channel)`; the "multi" referred to multiple channel names appearing in one folder. `individual_tiff` describes the layout accurately and avoids confusion with OME-TIFF (which actually packs channels into a single multi-page file).
+- `multi_channel_tiff` was a misleading name — there is one TIFF per `(z, channel)`; the "multi" referred to multiple channel names appearing in one folder. `single_tiff` describes the layout accurately and avoids confusion with OME-TIFF (which actually packs channels into a single multi-page file).
 - `SingleChannelTiffHandler` existed to merge AION sibling folders into one logical acquisition. The user has confirmed AION isn't using TIFF output any more (OME-TIFF only) — keeping the handler is dead weight.
 - The legacy `current_…` layout has to keep working: the existing test fixtures and the user's on-disk data still use it.
 
@@ -42,23 +42,27 @@ OME-TIFF and legacy folders leave both at the defaults — no per-handler change
 
 ### Handler protocol — `FormatHandler` (`src/gallery_view/sources/base.py`)
 
-`iter_z_slices`, `load_full_stack`, `iter_full_channel_stacks`, and `cache_key` gain a `timepoint: str = "0"` keyword argument. Existing handlers (`OmeTiffHandler`) accept the parameter and ignore it; only `IndividualTiffHandler` consumes it to pick the `<t>/` subdirectory.
+`iter_z_slices`, `load_full_stack`, `iter_full_channel_stacks`, and `cache_key` gain a `timepoint: str = "0"` keyword argument. Existing handlers (`OmeTiffHandler`) accept the parameter and ignore it; only `SingleTiffHandler` consumes it to pick the `<t>/` subdirectory.
 
-### Handler implementation — `IndividualTiffHandler`
+### Handler implementation — `SingleTiffHandler`
 
-**Detection.** A folder is `individual_tiff` if either:
+**Detection.** A folder is `single_tiff` if either:
 
 - (legacy) `<folder>/0/current_0_0_*.tiff` exists with at least one channel name, or
 - (squid) any numeric `<folder>/<t>/` subdirectory contains a file matching the squid filename regex.
 
-**Filename parser.** Two regexes, tried in order during detection so a folder commits to one layout:
+**Filename parsers.** Two regexes, tried in order during detection so a folder commits to one layout:
 
 ```
-squid:  ^(?:(?P<well>[A-Z]+\d+)_)?(?P<region>\d+)_(?P<fov>\d+)_(?P<z>\d+)_(?P<channel>.+)\.tiff?$
+squid:  ^(?P<region>[^_]+)_(?P<fov>\d+)_(?P<z>\d+)_(?P<channel>.+)\.tiff?$   (case-insensitive)
 legacy: ^current_(?P<fov>\d+)_(?P<z>\d+)_(?P<channel>.+)\.tiff?$
 ```
 
+The squid pattern matches `cephla-lab/ndviewer_light`'s `FPATTERN` exactly. `<region>` is `[^_]+` — any non-underscore string — so well-based acquisitions (`A1_0_0_…tiff`) and numeric-region acquisitions (`0_0_0_…tiff`) both match without a separate well-prefix branch. Squid puts the well *as* the region when wells are used.
+
 Legacy matches synthesise `region = "0"` so the composite FOV id is `"0_<fov>"`, identical in shape to squid's. The detected layout is recorded in `acq.extra["layout"] = "squid" | "legacy"` and used by the iteration helpers.
+
+The two regexes are disjoint: the squid regex rejects a leading `current_` because `current` would land in the `<region>` slot but the next required group is `<fov>` `\d+` — and `current_<fov>_<z>_<channel>` has `<fov>` where the squid pattern expects `<fov>` (so it would match `current` as region and `<fov>_<z>_<channel>` after; that's actually three groups, but the squid pattern has four). Verify by running both on `current_0_0_Fluorescence_488_nm_Ex.tiff`: the squid pattern would treat `current` as region, `0` as fov, `0` as z, but then needs `_<channel>` next, which it gets. So the squid pattern *would* match the legacy filename too. **Therefore: always try the legacy regex first — if it matches, use legacy layout; only fall back to squid otherwise.**
 
 **`build()`.**
 
@@ -94,7 +98,7 @@ legacy:  <acq>/<t>/current_<fov>_*_<channel_pattern>.tiff
 
 ### Sources registry (`src/gallery_view/sources/__init__.py`)
 
-`HANDLERS = [OmeTiffHandler(), IndividualTiffHandler()]`. `SingleChannelTiffHandler` is removed.
+`HANDLERS = [OmeTiffHandler(), SingleTiffHandler()]`. `SingleChannelTiffHandler` is removed.
 
 ### Backward compatibility
 
@@ -107,16 +111,16 @@ legacy:  <acq>/<t>/current_<fov>_*_<channel_pattern>.tiff
 src/gallery_view/types.py                          # +timepoints, +selected_timepoint
 src/gallery_view/sources/base.py                   # +timepoint kwarg in protocol
 src/gallery_view/sources/__init__.py               # drop single, rename multi -> individual
-src/gallery_view/sources/multi_channel_tiff.py     # git mv -> individual_tiff.py + rewrite
+src/gallery_view/sources/multi_channel_tiff.py     # git mv -> single_tiff.py + rewrite
 src/gallery_view/sources/single_channel_tiff.py    # delete
 src/gallery_view/sources/ome_tiff.py               # accept+ignore timepoint kwarg
 src/gallery_view/cache.py                          # cache key shape, CACHE_VERSION bump
 src/gallery_view/loader.py                         # Job.timepoint, plumb through
 src/gallery_view/ui/gallery_window.py              # Time combo, RowKey/mip_data shape
 README.md                                          # format table updated
-tests/conftest.py                                  # +make_squid_individual_tiff_acq, rename multi
+tests/conftest.py                                  # +make_squid_single_tiff_acq, rename multi
 tests/sources/test_single_channel_tiff.py          # delete
-tests/sources/test_multi_channel_tiff.py           # git mv -> test_individual_tiff.py + add cases
+tests/sources/test_multi_channel_tiff.py           # git mv -> test_single_tiff.py + add cases
 tests/sources/test_registry.py                     # handler list
 tests/sources/test_ome_tiff.py                     # drop single-channel cross-refs if any
 tests/test_scan.py                                 # drop AION case, add squid case
@@ -128,11 +132,11 @@ tests/test_cache.py                                # CACHE_VERSION assertion
 
 **Delete.** `tests/sources/test_single_channel_tiff.py`; `make_single_channel_tiff_acq` from conftest; any single-channel references in other test files.
 
-**Rename via `git mv`.** `tests/sources/test_multi_channel_tiff.py` → `test_individual_tiff.py`. Conftest fixture `make_multi_channel_tiff_acq` → `make_individual_tiff_acq` (still writes the legacy layout — existing tests assert backward compatibility through it).
+**Rename via `git mv`.** `tests/sources/test_multi_channel_tiff.py` → `test_single_tiff.py`. Conftest fixture `make_multi_channel_tiff_acq` → `make_single_tiff_acq` (still writes the legacy layout — existing tests assert backward compatibility through it).
 
-**New conftest fixture.** `make_squid_individual_tiff_acq(nt=1, regions=1, fovs_per_region=1, wavelengths=…, nz=…, with_well_prefix=False)`.
+**New conftest fixture.** `make_squid_single_tiff_acq(nt=1, regions=1, fovs_per_region=1, wavelengths=…, nz=…, with_well_prefix=False)`.
 
-**New cases in `test_individual_tiff.py`.**
+**New cases in `test_single_tiff.py`.**
 
 1. `test_detect_squid_layout` — folder with `<t>/<region>_<fov>_<z>_<channel>.tiff` is detected.
 2. `test_detect_squid_layout_with_well_prefix` — same, with the optional `<well>_` prefix.
@@ -147,7 +151,7 @@ tests/test_cache.py                                # CACHE_VERSION assertion
 
 - `test_scan.py` — drop AION single-channel case; add a squid-layout scan that exercises multi-timepoint discovery.
 - `test_handler_cache_integration.py` — assert cache key includes `t<t>` and per-timepoint entries don't collide.
-- `test_registry.py` — `HANDLERS == [OmeTiffHandler, IndividualTiffHandler]`.
+- `test_registry.py` — `HANDLERS == [OmeTiffHandler, SingleTiffHandler]`.
 - `test_cache.py` — `CACHE_VERSION` is the bumped value; old-version cache entries are not loaded.
 
 **Out of scope.** GUI tests for the Time combo. The combo is wired identically to the existing FOV combo; manual verification in the running app covers it.
