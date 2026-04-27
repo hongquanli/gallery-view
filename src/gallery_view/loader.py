@@ -22,6 +22,7 @@ class Job:
     fov: str
     channel: Channel
     ch_idx: int
+    timepoint: str = "0"
 
 
 class MipLoader(QThread):
@@ -85,7 +86,9 @@ class MipLoader(QThread):
                 )
 
     def _process(self, job: Job) -> None:
-        src, ch_id = job.acq.handler.cache_key(job.acq, job.fov, job.channel)
+        src, ch_id = job.acq.handler.cache_key(
+            job.acq, job.fov, job.channel, timepoint=job.timepoint
+        )
         cached, shape = cache.load(src, ch_id)
         if cached is not None:
             self._emit_ready(job, cached, shape)
@@ -100,7 +103,9 @@ class MipLoader(QThread):
         state = mips.new_axis_state()
         n = 0
         ny = nx = 0
-        for slice_yx in job.acq.handler.iter_z_slices(job.acq, job.fov, job.channel):
+        for slice_yx in job.acq.handler.iter_z_slices(
+            job.acq, job.fov, job.channel, timepoint=job.timepoint,
+        ):
             if n == 0:
                 ny, nx = slice_yx.shape
             elif slice_yx.shape != (ny, nx):

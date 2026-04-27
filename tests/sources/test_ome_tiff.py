@@ -48,6 +48,15 @@ def test_iter_z_slices_count_and_dtype(handler, make_ome_tiff_acq):
     assert slices[0].shape == (4, 5)
 
 
+def test_iter_z_slices_accepts_timepoint_kwarg(handler, make_ome_tiff_acq):
+    """OME-TIFF has no <t>/ subdir but the protocol method takes the
+    kwarg. Pass an arbitrary value and confirm slices come back unchanged."""
+    folder = make_ome_tiff_acq(nz=3, ny=4, nx=5)
+    acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
+    slices = list(handler.iter_z_slices(acq, "0", acq.channels[0], timepoint="7"))
+    assert len(slices) == 3
+
+
 def test_cache_key_is_stable_and_distinct_per_channel(handler, make_ome_tiff_acq):
     folder = make_ome_tiff_acq(wavelengths=("488", "561"))
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})

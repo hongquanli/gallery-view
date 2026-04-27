@@ -38,29 +38,41 @@ class FormatHandler(Protocol):
         ...
 
     def cache_key(
-        self, acq: Acquisition, fov: str, channel: Channel
+        self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> tuple[str, str]:
         """Return ``(src_path_for_hash, channel_id)`` for ``cache.load/save``.
 
-        ``channel_id`` MUST be unique per (acq, fov, channel). Encode the FOV
-        into the string when the handler can have more than one FOV.
+        ``channel_id`` MUST be unique per (acq, fov, channel, timepoint).
+        Encode the FOV (and timepoint, where applicable) into the string
+        when the handler can have more than one. Handlers whose data is
+        partitioned by timepoint use this argument; OME-TIFF (which packs
+        all timepoints into a single file) ignores it.
         """
         ...
 
     def iter_z_slices(
-        self, acq: Acquisition, fov: str, channel: Channel
+        self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> Iterator[np.ndarray]:
-        """Yield each Z-slice as a YX float32 array, in Z-order."""
+        """Yield each Z-slice as a YX float32 array, in Z-order.
+
+        Handlers whose data is partitioned by timepoint use ``timepoint``
+        to pick the per-timepoint subdirectory; OME-TIFF (which packs all
+        timepoints into a single file) ignores it.
+        """
         ...
 
     def load_full_stack(
-        self, acq: Acquisition, fov: str, channel: Channel
+        self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> np.ndarray:
-        """Return the full ZYX stack (float32 or native dtype) for napari."""
+        """Return the full ZYX stack (float32 or native dtype) for napari.
+
+        Handlers whose data is partitioned by timepoint use ``timepoint``;
+        OME-TIFF ignores it.
+        """
         ...
 
     def iter_full_channel_stacks(
-        self, acq: Acquisition, fov: str
+        self, acq: Acquisition, fov: str, timepoint: str = "0"
     ) -> Iterator[tuple[Channel, np.ndarray]]:
         """Yield ``(Channel, ZYX-stack)`` pairs for every channel in ``fov``.
 
@@ -69,7 +81,8 @@ class FormatHandler(Protocol):
         one file (notably OME-TIFF) should override it to load the file
         ONCE and slice — calling ``load_full_stack`` per channel for an
         OME-TIFF would re-load the entire (potentially multi-GB) file
-        each time.
+        each time. Handlers whose data is partitioned by timepoint use
+        ``timepoint``; OME-TIFF ignores it.
         """
         ...
 

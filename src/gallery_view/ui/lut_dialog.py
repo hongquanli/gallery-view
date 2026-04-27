@@ -217,7 +217,9 @@ def show_lut_dialog(
     def save_all() -> None:
         for ci in ch_keys:
             channel = acq.channels[ci]
-            src, ch_id = acq.handler.cache_key(acq, fov, channel)
+            src, ch_id = acq.handler.cache_key(
+                acq, fov, channel, timepoint=acq.selected_timepoint
+            )
             axis_data = {}
             for ax in AXES:
                 entry = mip_data.get((acq_id, fov, ci, ax))
