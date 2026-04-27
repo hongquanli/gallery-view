@@ -15,7 +15,7 @@ import platformdirs
 
 from .types import AxisMip, ChannelMips, ShapeZYX
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2  # v2: OmeTiffHandler honors Plane tags (fixes XLight V3 channels)
 AXES = ("z", "y", "x")
 CACHE_DIR = str(Path(platformdirs.user_cache_dir("gallery-view")) / "mips")
 
