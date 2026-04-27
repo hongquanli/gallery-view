@@ -3,7 +3,9 @@
 import os
 from dataclasses import dataclass
 
+import numpy as np
 from qtpy.QtCore import Qt
+from qtpy.QtGui import QImage, QPixmap
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -19,7 +21,9 @@ from qtpy.QtWidgets import (
 
 from .. import scan
 from ..loader import Job, MipLoader
-from ..types import Acquisition
+from ..mips import mip_to_rgba
+from ..types import Acquisition, AxisMip
+from .colors import CHANNEL_ORDER, rgb_for
 
 THIN_Z_THRESHOLD = 5
 THUMB_SIZE_PRESETS = [("Small", 80), ("Medium", 160), ("Large", 320)]
@@ -30,6 +34,24 @@ DEFAULT_THUMB_SIZE = 160
 class Source:
     path: str
     acq_ids: list[int]
+
+
+@dataclass
+class RowKey:
+    """A row in the gallery: (acq_id, fov)."""
+    acq_id: int
+    fov: str
+
+
+@dataclass
+class RowWidgets:
+    container: QWidget
+    mag_lbl: "QLabel"
+    time_lbl: "QLabel"
+    name_lbl: "QLabel"
+    thumb_labels: "dict[int, QLabel]"   # ch_idx -> data thumb
+    thumb_columns: "dict[str, QLabel]"  # wavelength -> the cell currently rendered (data or placeholder)
+    fov_combo: "QComboBox | None"
 
 
 class GalleryWindow(QMainWindow):
@@ -45,6 +67,12 @@ class GalleryWindow(QMainWindow):
 
         self.acquisitions: list[Acquisition] = []
         self.sources: list[Source] = []
+        self.row_keys: list[RowKey] = []
+        self.row_widgets: dict[tuple[int, str], RowWidgets] = {}
+        self.expanded_fov_mode: bool = False
+        self.square_footprint: bool = False
+        # (acq_id, fov, ch_idx, axis) -> AxisMip
+        self.mip_data: dict[tuple[int, str, int, str], "AxisMip"] = {}
 
         # Loader thread (long-lived)
         self.loader = MipLoader()
@@ -239,26 +267,252 @@ class GalleryWindow(QMainWindow):
         # Filled in by Task 20.
         pass
 
-    def _rebuild_rows(self) -> None:
-        # Filled in by Task 19.
-        pass
-
     def _refresh_visibility(self) -> None:
         # Filled in by Task 20.
         pass
 
-    def _set_axis(self, axis: str) -> None:
-        # Filled in by Task 19.
-        self.view_axis = axis
+    # ── row rendering ──
 
-    def _set_thumb_size(self, size: int) -> None:
-        # Filled in by Task 19.
-        self.thumb_size = size
+    def _rebuild_rows(self) -> None:
+        # Clear existing row widgets
+        for rw in self.row_widgets.values():
+            self.scroll_layout.removeWidget(rw.container)
+            rw.container.deleteLater()
+        self.row_widgets.clear()
+        self.row_keys = []
 
-    # ── loader callbacks (stubs filled in by Task 19) ──
+        # Build the row key list per the current expansion mode
+        for acq_id, acq in enumerate(self.acquisitions):
+            if acq is None:
+                continue
+            if self.expanded_fov_mode:
+                for fov in acq.fovs:
+                    self.row_keys.append(RowKey(acq_id, fov))
+            else:
+                self.row_keys.append(RowKey(acq_id, acq.selected_fov))
+
+        # Compute the active wavelength column set (drop any column no row uses)
+        active_wls: list[str] = self._active_wavelengths()
+
+        # Insert one row widget per RowKey, before the trailing stretch
+        insert_at = self.scroll_layout.count() - 1  # before stretch
+        for key in self.row_keys:
+            acq = self.acquisitions[key.acq_id]
+            row = self._make_row_widget(key, acq, active_wls)
+            self.row_widgets[(key.acq_id, key.fov)] = row
+            self.scroll_layout.insertWidget(insert_at, row.container)
+            insert_at += 1
+
+        # Re-render any thumbs we already have data for
+        for (acq_id, fov, ch_idx, axis), ax_mip in list(self.mip_data.items()):
+            if axis != self.view_axis:
+                continue
+            self._render_thumb(acq_id, fov, ch_idx, ax_mip)
+
+        self._refresh_visibility()
+        self._apply_label_sizes()
+
+    def _active_wavelengths(self) -> list[str]:
+        seen: set[str] = set()
+        for acq in self.acquisitions:
+            if acq is None:
+                continue
+            for ch in acq.channels:
+                seen.add(ch.wavelength)
+        ordered = [wl for wl in CHANNEL_ORDER if wl in seen]
+        extras = sorted(
+            [wl for wl in seen if wl not in CHANNEL_ORDER],
+            key=lambda w: int(w) if w.isdigit() else 999,
+        )
+        return ordered + extras
+
+    def _make_row_widget(self, key, acq, active_wls):
+        from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QLabel, QPushButton, QComboBox
+        from ..sources._squid_common import parse_timestamp, parse_mag
+
+        container = QWidget()
+        h = QHBoxLayout(container)
+        h.setContentsMargins(4, 2, 4, 2)
+        h.setSpacing(4)
+
+        mag = parse_mag(acq.folder_name) or acq.params.get("mag") or "?"
+        mag_lbl = QLabel(f"{mag}x" if isinstance(mag, int) else str(mag))
+        mag_lbl.setFixedWidth(30)
+        mag_lbl.setStyleSheet("color: #ccc; font-size: 11px; font-weight: bold;")
+        h.addWidget(mag_lbl)
+
+        ts = parse_timestamp(acq.folder_name)
+        time_lbl = QLabel(f"{ts[0]}\n{ts[1]}" if ts else "")
+        time_lbl.setFixedWidth(40)
+        time_lbl.setAlignment(Qt.AlignCenter)
+        time_lbl.setStyleSheet("color: #888; font-size: 9px;")
+        h.addWidget(time_lbl)
+
+        if self.expanded_fov_mode and len(acq.fovs) > 1:
+            fov_lbl = QLabel(f"FOV {key.fov}")
+            fov_lbl.setFixedWidth(50)
+            fov_lbl.setStyleSheet("color: #888; font-size: 10px;")
+            h.addWidget(fov_lbl)
+
+        name_lbl = QLabel(acq.display_name)
+        name_lbl.setFixedWidth(140)
+        name_lbl.setToolTip(acq.path)
+        name_lbl.setStyleSheet("color: #ccc; font-size: 10px;")
+        h.addWidget(name_lbl)
+
+        # One column per active wavelength
+        thumb_labels: dict[int, QLabel] = {}
+        thumb_columns: dict[str, QLabel] = {}
+        ch_by_wl = {ch.wavelength: (i, ch) for i, ch in enumerate(acq.channels)}
+        for wl in active_wls:
+            col = QVBoxLayout()
+            col.setSpacing(1)
+            color = rgb_for(wl)
+            ch_lbl = QLabel(wl if wl in ch_by_wl else "")
+            ch_lbl.setAlignment(Qt.AlignCenter)
+            ch_lbl.setFixedHeight(14)
+            if wl in ch_by_wl:
+                ch_lbl.setStyleSheet(
+                    f"color: rgb({color[0]},{color[1]},{color[2]}); font-size: 9px;"
+                )
+            else:
+                ch_lbl.setStyleSheet("color: transparent; font-size: 9px;")
+            col.addWidget(ch_lbl)
+
+            thumb = QLabel()
+            thumb.setAlignment(Qt.AlignCenter)
+            thumb.setFixedSize(self.thumb_size, self.thumb_size)
+            if wl in ch_by_wl:
+                thumb.setStyleSheet(
+                    "background-color: #222; border: 1px solid #2a2a2a; border-radius: 3px;"
+                )
+                thumb_labels[ch_by_wl[wl][0]] = thumb
+            else:
+                thumb.setStyleSheet("background-color: transparent; border: none;")
+            thumb_columns[wl] = thumb
+            col.addWidget(thumb)
+            h.addLayout(col)
+
+        h.addStretch()
+
+        # FOV picker (default mode only)
+        fov_combo: QComboBox | None = None
+        if not self.expanded_fov_mode and len(acq.fovs) > 1:
+            fov_combo = QComboBox()
+            for fov in acq.fovs:
+                fov_combo.addItem(f"FOV {fov}", fov)
+            fov_combo.setCurrentIndex(acq.fovs.index(acq.selected_fov))
+            fov_combo.currentIndexChanged.connect(
+                lambda i, k=key, c=fov_combo: self._on_fov_changed(k, c.itemData(i))
+            )
+            h.addWidget(fov_combo)
+
+        btn_3d = QPushButton("Open 3D View")
+        btn_3d.setFixedSize(110, 26)
+        btn_3d.setStyleSheet(
+            "QPushButton { background-color: #2d5aa0; color: white; border-radius: 4px;"
+            " font-size: 11px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #3a6fc0; }"
+        )
+        btn_3d.clicked.connect(lambda _, k=key: self._open_napari(k))
+        h.addWidget(btn_3d)
+
+        btn_lut = QPushButton("Adjust Contrast")
+        btn_lut.setFixedSize(110, 26)
+        btn_lut.setStyleSheet(
+            "QPushButton { background-color: #555; color: white; border-radius: 4px;"
+            " font-size: 11px; }"
+            "QPushButton:hover { background-color: #777; }"
+        )
+        btn_lut.clicked.connect(lambda _, k=key: self._adjust_lut(k))
+        h.addWidget(btn_lut)
+
+        return RowWidgets(
+            container=container,
+            mag_lbl=mag_lbl,
+            time_lbl=time_lbl,
+            name_lbl=name_lbl,
+            thumb_labels=thumb_labels,
+            thumb_columns=thumb_columns,
+            fov_combo=fov_combo,
+        )
+
+    def _on_fov_changed(self, key, new_fov: str) -> None:
+        acq = self.acquisitions[key.acq_id]
+        acq.selected_fov = new_fov
+        # Re-key the row widget; the easiest is to rebuild rows since rows are cheap
+        self._rebuild_rows()
+        # Enqueue jobs for the new FOV's channels (cache-aware; loader will skip cached)
+        self._enqueue_jobs_for_acq(key.acq_id, acq, new_fov)
+
+    # ── physical aspect and label sizing ──
+
+    def _phys_aspect(self, acq_id, fov, axis: str) -> float:
+        """Return physical_height / physical_width for the given axis."""
+        acq = self.acquisitions[acq_id]
+        if acq is None:
+            return 1.0
+        sensor_pixel_um = acq.params.get("sensor_pixel_size_um", 6.5)
+        from ..sources._squid_common import parse_mag
+        mag = parse_mag(acq.folder_name) or acq.params.get("mag") or 1
+        pixel_um = sensor_pixel_um / mag if mag else sensor_pixel_um
+        dz_um = acq.params.get("dz(um)", pixel_um)
+        shape = acq.shape_zyx
+        if shape is None:
+            return 1.0
+        nz, ny, nx = shape
+        if axis == "z":
+            return (ny * pixel_um) / max(nx * pixel_um, 1e-9)
+        if axis == "y":
+            return (nz * dz_um) / max(nx * pixel_um, 1e-9)
+        if axis == "x":
+            return (nz * dz_um) / max(ny * pixel_um, 1e-9)
+        return 1.0
+
+    def _row_label_size(self, acq_id, fov) -> tuple[int, int]:
+        if self.square_footprint:
+            return self.thumb_size, self.thumb_size
+        aspect = self._phys_aspect(acq_id, fov, self.view_axis)
+        return self.thumb_size, max(20, int(round(self.thumb_size * aspect)))
+
+    def _apply_label_sizes(self) -> None:
+        for (acq_id, fov), rw in self.row_widgets.items():
+            w, h = self._row_label_size(acq_id, fov)
+            for thumb in rw.thumb_columns.values():
+                thumb.setFixedSize(w, h)
+
+    def _render_thumb(self, acq_id, fov, ch_idx, ax_mip) -> None:
+        rw = self.row_widgets.get((acq_id, fov))
+        if rw is None or ch_idx not in rw.thumb_labels:
+            return
+        acq = self.acquisitions[acq_id]
+        wl = acq.channels[ch_idx].wavelength
+        rgba = mip_to_rgba(ax_mip.mip, ax_mip.p1, ax_mip.p999, rgb_for(wl))
+        h, w = rgba.shape[:2]
+        qimg = QImage(rgba.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
+        target_w, target_h = self._row_label_size(acq_id, fov)
+        pixmap = QPixmap.fromImage(qimg).scaled(
+            target_w, target_h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation
+        )
+        rw.thumb_labels[ch_idx].setPixmap(pixmap)
+        rw.thumb_labels[ch_idx].setStyleSheet(
+            "background-color: #111; border: 1px solid #2a2a2a; border-radius: 3px;"
+        )
+
+    # ── loader callbacks ──
 
     def _on_mip_ready(self, acq_id, fov, ch_idx, wavelength, channel_mips, shape) -> None:
-        pass
+        if acq_id >= len(self.acquisitions) or self.acquisitions[acq_id] is None:
+            return
+        acq = self.acquisitions[acq_id]
+        if shape is not None and acq.shape_zyx is None:
+            acq.shape_zyx = shape
+        for axis, ax_mip in channel_mips.items():
+            self.mip_data[(acq_id, fov, ch_idx, axis)] = ax_mip
+        if self.view_axis in channel_mips:
+            self._render_thumb(acq_id, fov, ch_idx, channel_mips[self.view_axis])
+        # Aspect may now be known; re-size labels in this row
+        self._apply_label_sizes()
 
     def _on_progress(self, done, queued, message) -> None:
         self.status.setText(f"{done}/{queued} channels — {message}")
@@ -266,6 +520,36 @@ class GalleryWindow(QMainWindow):
     def _on_idle(self) -> None:
         loaded = sum(1 for a in self.acquisitions if a is not None)
         self.status.setText(f"{loaded} acquisitions loaded")
+
+    # ── display controls ──
+
+    def _set_axis(self, axis: str) -> None:
+        if axis == self.view_axis:
+            return
+        self.view_axis = axis
+        self._apply_label_sizes()
+        for (acq_id, fov, ch_idx, ax), ax_mip in self.mip_data.items():
+            if ax != axis:
+                continue
+            self._render_thumb(acq_id, fov, ch_idx, ax_mip)
+
+    def _set_thumb_size(self, size: int) -> None:
+        self.thumb_size = size
+        self._apply_label_sizes()
+        for (acq_id, fov, ch_idx, axis), ax_mip in self.mip_data.items():
+            if axis != self.view_axis:
+                continue
+            self._render_thumb(acq_id, fov, ch_idx, ax_mip)
+
+    # ── temporary stubs (filled in by Tasks 22-23) ──
+
+    def _open_napari(self, key) -> None:
+        from qtpy.QtWidgets import QMessageBox
+        QMessageBox.information(self, "Coming soon", "3D viewer wiring in Task 23")
+
+    def _adjust_lut(self, key) -> None:
+        from qtpy.QtWidgets import QMessageBox
+        QMessageBox.information(self, "Coming soon", "LUT dialog wiring in Task 22")
 
     # ── shutdown ──
 
