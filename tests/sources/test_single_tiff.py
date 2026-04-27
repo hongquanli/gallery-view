@@ -38,7 +38,8 @@ def test_build_populates_acquisition(handler, make_single_tiff_acq):
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
     assert acq is not None
     assert [c.wavelength for c in acq.channels] == ["488", "638"]
-    assert acq.fovs == ["0"]
+    # Legacy folders synthesise region="0" so the composite FOV id is "0_0".
+    assert acq.fovs == ["0_0"]
 
 
 def test_read_shape_matches_written(handler, make_single_tiff_acq):
@@ -108,3 +109,36 @@ def test_squid_regex_also_matches_legacy_filenames():
     p = parse_squid_filename("current_0_0_Fluorescence_488_nm_Ex.tiff")
     assert p is not None
     assert p["region"] == "current"  # documents the overlap
+
+
+# ── squid layout detection + multi-FOV discovery ────────────────────────────
+
+
+def test_detect_squid_layout(handler, make_squid_single_tiff_acq):
+    folder = make_squid_single_tiff_acq()
+    assert handler.detect(str(folder)) is True
+
+
+def test_detect_squid_layout_with_well_prefix(handler, make_squid_single_tiff_acq):
+    folder = make_squid_single_tiff_acq(with_well_prefix=True)
+    assert handler.detect(str(folder)) is True
+
+
+def test_legacy_layout_still_detects(handler, make_single_tiff_acq):
+    folder = make_single_tiff_acq()
+    assert handler.detect(str(folder)) is True
+
+
+def test_build_discovers_composite_fovs(handler, make_squid_single_tiff_acq):
+    folder = make_squid_single_tiff_acq(regions=2, fovs_per_region=2)
+    acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
+    assert acq is not None
+    assert acq.fovs == ["0_0", "0_1", "1_0", "1_1"]
+    assert acq.selected_fov == "0_0"
+
+
+def test_legacy_build_uses_zero_region(handler, make_single_tiff_acq):
+    folder = make_single_tiff_acq()
+    acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
+    assert acq is not None
+    assert acq.fovs == ["0_0"]

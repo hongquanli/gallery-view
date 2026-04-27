@@ -120,3 +120,59 @@ def make_single_tiff_acq(tmp_path):
         return folder
 
     return _build
+
+
+@pytest.fixture
+def make_squid_single_tiff_acq(tmp_path):
+    """Build an acquisition in squid's per-image TIFF layout.
+
+    ``<acq>/<t>/[<well>_]<region>_<fov>_<z>_<channel>.tiff``
+    """
+
+    def _build(
+        wavelengths=("488", "561"),
+        nz=3,
+        ny=8,
+        nx=10,
+        nt=1,
+        regions=1,
+        fovs_per_region=1,
+        with_well_prefix=False,
+        well="A1",
+        folder_name="25x_A1_2026-04-26_12-00-00.000000",
+        sensor_pixel_size_um=6.5,
+        dz_um=2.0,
+        mag=25,
+    ) -> Path:
+        folder = tmp_path / folder_name
+        folder.mkdir()
+        _write_params(folder, {
+            "sensor_pixel_size_um": sensor_pixel_size_um,
+            "dz(um)": dz_um,
+        })
+        _write_channels_yaml(folder, [
+            {
+                "name": f"Fluorescence_{wl}_nm_Ex",
+                "enabled": True,
+                "camera_settings": {"exposure_time_ms": 100.0 * (i + 1)},
+                "illumination_settings": {"intensity": 25.0 * (i + 1)},
+            }
+            for i, wl in enumerate(wavelengths)
+        ])
+        prefix = f"{well}_" if with_well_prefix else ""
+        for t in range(nt):
+            t_dir = folder / str(t)
+            t_dir.mkdir()
+            for r in range(regions):
+                for f in range(fovs_per_region):
+                    stack = _gradient_3d(nz, ny, nx, 0)
+                    for z in range(nz):
+                        for c, wl in enumerate(wavelengths):
+                            ch_stack = _gradient_3d(nz, ny, nx, c)
+                            tifffile.imwrite(
+                                t_dir / f"{prefix}{r}_{f}_{z}_Fluorescence_{wl}_nm_Ex.tiff",
+                                ch_stack[z],
+                            )
+        return folder
+
+    return _build
