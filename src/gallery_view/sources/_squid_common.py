@@ -98,21 +98,3 @@ def parse_mag(folder_name: str) -> int | None:
     """Pull the leading magnification (e.g. ``25`` from ``25x_…``) or None."""
     m = re.match(r"(\d+)x_", folder_name)
     return int(m.group(1)) if m else None
-
-
-def parse_mag_well_wl(folder_name: str) -> tuple[int, str, str] | None:
-    """Pull (mag, well, wavelength) from a single-channel squid folder name.
-
-    Single-channel folders look like ``25x_C3_488_LR1000_2026-04-26_…``.
-    Returns None when any component is missing.
-    """
-    m = re.match(
-        r"(\d+)x_([A-H]\d{1,2})_(\d+)_.*?_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}",
-        folder_name,
-    )
-    if not m:
-        return None
-    mag, well, wl = int(m.group(1)), m.group(2), m.group(3)
-    if wl not in KNOWN_WAVELENGTHS:
-        return None
-    return mag, well, wl
