@@ -1,6 +1,5 @@
 """OME-TIFF handler for squid output (axes ZCYX, TCYX, or CYX)."""
 
-import re
 from typing import Iterator
 
 import numpy as np
@@ -30,8 +29,6 @@ class OmeTiffHandler:
             channels = self._channels_from_ome_header(ome_path)
         if not channels:
             return None
-        # Refine wavelengths from channel names if the shared parser left them as "unknown"
-        channels = self._refine_wavelengths(channels)
         folder_name = os.path.basename(folder)
         return Acquisition(
             handler=self,
@@ -102,21 +99,6 @@ class OmeTiffHandler:
         return common.channel_extras_from_yaml(acq.path, channel)
 
     # ── helpers ──
-
-    @staticmethod
-    def _refine_wavelengths(channels: list[Channel]) -> list[Channel]:
-        """If channels have 'unknown' wavelength, try to extract from the name."""
-        refined = []
-        for ch in channels:
-            if ch.wavelength != "unknown":
-                refined.append(ch)
-            else:
-                # Try to extract wavelength from channel name
-                # Matches patterns like "488_nm", "488 nm", "488nm", etc.
-                wl_match = re.search(r"(\d+)[_\s]*nm", ch.name)
-                wl = wl_match.group(1) if wl_match else "unknown"
-                refined.append(Channel(name=ch.name, wavelength=wl))
-        return refined
 
     @staticmethod
     def _channel_index(acq: Acquisition, channel: Channel) -> int:

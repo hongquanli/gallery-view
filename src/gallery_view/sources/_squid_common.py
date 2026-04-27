@@ -44,7 +44,7 @@ def parse_acquisition_channels_yaml(folder: str) -> list[Channel]:
         name = ch.get("name", "")
         if not name:
             continue
-        wl_match = re.search(r"(\d+)\s*nm", name)
+        wl_match = re.search(r"(\d+)[\s_]*nm", name)
         wl = wl_match.group(1) if wl_match else "unknown"
         channels.append(Channel(name=name, wavelength=wl))
     channels.sort(
