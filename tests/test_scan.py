@@ -76,3 +76,13 @@ def test_ingest_can_be_re_called_after_completion(make_ome_tiff_acq):
     a2 = scan.ingest(str(folder))
     assert len(a1) == 1
     assert len(a2) == 1
+
+
+def test_ingest_detects_squid_single_tiff(make_squid_single_tiff_acq):
+    folder = make_squid_single_tiff_acq(nt=2, regions=2, fovs_per_region=2)
+    acqs = scan.ingest(str(folder))
+    assert len(acqs) == 1
+    acq = acqs[0]
+    assert acq.handler.name == "single_tiff"
+    assert acq.timepoints == ["0", "1"]
+    assert acq.fovs == ["0_0", "0_1", "1_0", "1_1"]

@@ -73,3 +73,19 @@ def test_cache_keys_distinct_across_acquisitions(make_ome_tiff_acq):
     path_a = cache._cache_path(*key_a)
     path_b = cache._cache_path(*key_b)
     assert path_a != path_b
+
+
+def test_cache_keys_distinct_across_timepoints(make_squid_single_tiff_acq):
+    """Per-timepoint MIPs must hash to different cache files so they
+    don't overwrite each other."""
+    from gallery_view.sources.single_tiff import SingleTiffHandler
+    handler = SingleTiffHandler()
+    folder = make_squid_single_tiff_acq(nt=2)
+    acq = handler.build(
+        str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5}
+    )
+    k_t0 = handler.cache_key(acq, acq.fovs[0], acq.channels[0], timepoint="0")
+    k_t1 = handler.cache_key(acq, acq.fovs[0], acq.channels[0], timepoint="1")
+    assert k_t0 != k_t1
+    assert "/t0/" in k_t0[1]
+    assert "/t1/" in k_t1[1]
