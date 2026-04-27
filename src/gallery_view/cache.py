@@ -89,7 +89,13 @@ def save(
     axis_data: ChannelMips,
     shape_zyx: ShapeZYX | None = None,
 ) -> None:
-    """Full save: arrays + auto-percentiles + shape. Removes any LUT override."""
+    """Full save: arrays + auto-percentiles + shape.
+
+    Preserves any pre-existing LUT-override sidecar — the override is a
+    user preference (intensity bounds) that's independent of the MIP
+    arrays it applies to, so re-computing MIPs (e.g. on a cache version
+    bump) shouldn't nuke saved contrast settings.
+    """
     os.makedirs(CACHE_DIR, exist_ok=True)
     path = _cache_path(src_path, channel_id)
     payload: dict = {"version": np.int32(CACHE_VERSION)}
@@ -102,12 +108,6 @@ def save(
         payload["ny_orig"] = np.int32(shape_zyx[1])
         payload["nx_orig"] = np.int32(shape_zyx[2])
     np.savez_compressed(path, **payload)
-    sidecar = _lut_override_path(src_path, channel_id)
-    if sidecar.exists():
-        try:
-            sidecar.unlink()
-        except OSError:
-            pass
 
 
 def save_lut_only(

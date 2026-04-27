@@ -85,7 +85,11 @@ def test_lut_override_applies_on_top_of_cached_defaults():
     assert loaded["y"].p1 == pytest.approx(data["y"].p1)
 
 
-def test_save_clears_pre_existing_lut_override():
+def test_save_preserves_pre_existing_lut_override():
+    """A fresh MIP recompute must NOT delete the user's saved LUT — the
+    override is a user preference about contrast bounds, independent of
+    the MIP arrays it applies to. Recomputing MIPs (e.g. cache version
+    bump) shouldn't nuke saved contrast settings."""
     data = _make_axis_data()
     cache.save("/some/src", "wl_488", data, (10, 4, 5))
     cache.save_lut_only("/some/src", "wl_488",
@@ -93,7 +97,11 @@ def test_save_clears_pre_existing_lut_override():
     sidecar = cache._lut_override_path("/some/src", "wl_488")
     assert sidecar.exists()
     cache.save("/some/src", "wl_488", data, (10, 4, 5))  # fresh compute
-    assert not sidecar.exists()
+    # Sidecar must survive; load() applies it on top of the new percentiles.
+    assert sidecar.exists()
+    loaded, _ = cache.load("/some/src", "wl_488")
+    assert loaded["z"].p1 == 100.0
+    assert loaded["z"].p999 == 200.0
 
 
 def test_clear_all_removes_cache_dir(isolated_cache_dir):

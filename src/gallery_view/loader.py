@@ -121,6 +121,16 @@ class MipLoader(QThread):
         channel_mips = mips.axis_data_with_percentiles(finalized)
         shape_zyx: ShapeZYX = (n, ny, nx)
         cache.save(src, ch_id, channel_mips, shape_zyx)
+        # Re-apply any saved LUT override on top of the fresh percentiles —
+        # cache.save preserves the sidecar, but the in-memory channel_mips
+        # we hand to the gallery still has the auto-computed bounds.
+        overrides = cache._load_lut_override(src, ch_id)
+        if overrides:
+            for ax, (p1, p999) in overrides.items():
+                if ax in channel_mips:
+                    channel_mips[ax] = AxisMip(
+                        mip=channel_mips[ax].mip, p1=p1, p999=p999
+                    )
         self._emit_ready(job, channel_mips, shape_zyx)
         self._done += 1
         self._emit_progress(
