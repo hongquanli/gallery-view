@@ -62,9 +62,13 @@ class GalleryWindow(QMainWindow):
         self.setWindowTitle("gallery-view")
         self.setMinimumSize(1100, 700)
         self.setAcceptDrops(True)
+        # Bare (un-scoped) selectors so the dark theme cascades to every
+        # descendant widget — same approach as explorer_ovelle.py. Scoping
+        # the rule to ``QMainWindow`` only paints the frame, leaving the
+        # scroll area, content widget, and group margins platform-default
+        # (light gray on macOS).
         self.setStyleSheet(
-            "QMainWindow { background-color: #1a1a1a; color: white; }"
-            "QLabel { color: white; }"
+            "background-color: #1a1a1a; color: white;"
             "QGroupBox { font-size: 13px; font-weight: bold; border: 1px solid #333;"
             " border-radius: 6px; margin-top: 8px; padding: 6px 4px 4px 4px; color: #ddd; }"
             "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
@@ -387,6 +391,10 @@ class GalleryWindow(QMainWindow):
     def _refresh_visibility(self) -> None:
         active_mags = {m for m, cb in self.mag_checkboxes.items() if cb.isChecked()}
         hide_thin = self.hide_thin_btn.isChecked()
+
+        # Pass 1: compute visibility per row (don't trust ``isVisible()``,
+        # which depends on the parent chain that we're about to update).
+        row_visible: dict[tuple[int, str], bool] = {}
         for (acq_id, fov), rw in self.row_widgets.items():
             acq = self.acquisitions[acq_id]
             visible = acq is not None
@@ -395,27 +403,40 @@ class GalleryWindow(QMainWindow):
                 visible = mag in active_mags if mag is not None else True
             if visible and hide_thin and acq.shape_zyx is not None:
                 visible = acq.shape_zyx[0] >= THIN_Z_THRESHOLD
+            row_visible[(acq_id, fov)] = visible
             rw.container.setVisible(visible)
 
-        # Hide a source group whose rows are all hidden — keeps the gallery
-        # from showing empty group boxes after filtering.
+        # Pass 2: hide source groups whose rows are all hidden.
+        total_visible = sum(1 for v in row_visible.values() if v)
         for grp_idx, src in enumerate(self.sources):
             if grp_idx >= len(self.source_groups):
                 continue
-            any_visible = False
-            for acq_id in src.acq_ids:
-                acq = self.acquisitions[acq_id]
-                if acq is None:
-                    continue
-                fovs = acq.fovs if self.expanded_fov_mode else [acq.selected_fov]
-                for fov in fovs:
-                    rw = self.row_widgets.get((acq_id, fov))
-                    if rw and rw.container.isVisible():
-                        any_visible = True
-                        break
-                if any_visible:
-                    break
+            any_visible = any(
+                row_visible.get((acq_id, fov), False)
+                for acq_id in src.acq_ids
+                for fov in self._fovs_for_row(acq_id)
+            )
             self.source_groups[grp_idx].setVisible(any_visible)
+
+        # If a load has settled and the filters wipe everything, tell the
+        # user — otherwise the window looks broken.
+        total_rows = len(self.row_widgets)
+        if total_rows and total_visible == 0:
+            reasons = []
+            if hide_thin:
+                reasons.append('"Hide thin (Z<5)" is on')
+            if self.mag_checkboxes and not active_mags:
+                reasons.append("no magnification selected")
+            why = " and ".join(reasons) if reasons else "filters"
+            self.status.setText(
+                f"All {total_rows} rows hidden by {why}."
+            )
+
+    def _fovs_for_row(self, acq_id: int) -> list[str]:
+        acq = self.acquisitions[acq_id]
+        if acq is None:
+            return []
+        return acq.fovs if self.expanded_fov_mode else [acq.selected_fov]
 
     # ── row rendering ──
 
@@ -456,13 +477,17 @@ class GalleryWindow(QMainWindow):
         title = os.path.basename(os.path.normpath(src.path)) or src.path
         group = QGroupBox(f"{title}  ({len(src.acq_ids)})")
         group.setToolTip(src.path)
+        # Only style the group itself + its title — do NOT add a
+        # ``QGroupBox QWidget { background-color: transparent }`` cascade.
+        # On macOS Qt that cascade can blank out QLabel pixmaps and other
+        # widgets that rely on opaque painting; we explicitly transparent
+        # the row container instead (see _make_row_widget).
         group.setStyleSheet(
             f"QGroupBox {{ font-size: 13px; font-weight: bold; border: 1px solid #333;"
             f" border-radius: 6px; margin-top: 8px; padding: 6px 4px 4px 4px;"
             f" color: #ddd; background-color: {bg}; }}"
             f"QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px;"
-            f" background-color: {bg}; }}"
-            f"QGroupBox QWidget {{ background-color: transparent; }}"
+            f" background-color: {bg}; color: #ddd; }}"
         )
         group_layout = QVBoxLayout(group)
         group_layout.setContentsMargins(4, 4, 4, 4)
@@ -500,6 +525,10 @@ class GalleryWindow(QMainWindow):
 
     def _make_row_widget(self, key, acq, active_wls):
         container = QWidget()
+        # Row container is transparent so the parent group's bg colour shows
+        # through. We set this directly instead of via a ``QGroupBox QWidget``
+        # cascade to avoid blanking QLabel pixmaps on macOS Qt.
+        container.setStyleSheet("background-color: transparent;")
         h = QHBoxLayout(container)
         h.setContentsMargins(4, 2, 4, 2)
         h.setSpacing(4)
