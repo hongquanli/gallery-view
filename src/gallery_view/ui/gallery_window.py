@@ -668,8 +668,22 @@ class GalleryWindow(QMainWindow):
         QMessageBox.information(self, "Coming soon", "3D viewer wiring in Task 23")
 
     def _adjust_lut(self, key) -> None:
-        from qtpy.QtWidgets import QMessageBox
-        QMessageBox.information(self, "Coming soon", "LUT dialog wiring in Task 22")
+        from .lut_dialog import show_lut_dialog
+
+        acq = self.acquisitions[key.acq_id]
+
+        def refresh(acq_id, fov, ch_idx, ax_mip):
+            self._render_thumb(acq_id, fov, ch_idx, ax_mip)
+
+        show_lut_dialog(
+            parent=self,
+            acq=acq,
+            fov=key.fov,
+            axis=self.view_axis,
+            mip_data=self.mip_data,
+            refresh_thumb=refresh,
+            acq_id=key.acq_id,
+        )
 
     # ── shutdown ──
 
