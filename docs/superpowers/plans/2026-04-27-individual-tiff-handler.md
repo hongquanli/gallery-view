@@ -1,5 +1,9 @@
 # Single-TIFF Handler Implementation Plan
 
+> **Execution status (2026-04-27):**
+> - **Tasks 1-5 — done.** Shipped in PR #1 (`feat/individual-tiff-handler` → `main`): drop SingleChannelTiffHandler, rename MultiChannelTiffHandler → SingleTiffHandler, add timepoint plumbing through data model + protocol + Job, bump CACHE_VERSION → 4 with `/t<t>/` segment in keys, add `parse_squid_filename` + `parse_legacy_filename` regexes (defined and tested, not yet wired into detection).
+> - **Tasks 6-11 — pending.** Resume on a fresh branch after PR #1 is reviewed and merged. Order: 6 → 7 → 8 → 9 → 10 → 11.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Drop `SingleChannelTiffHandler`, rename `MultiChannelTiffHandler` → `SingleTiffHandler`, and teach the renamed handler squid's current per-image TIFF layout (`<acq>/<t>/<region>_<fov>_<z>_<channel>.tiff` — `<region>` is any non-underscore string), while keeping the legacy `<acq>/0/current_<fov>_<z>_<channel>.tiff` layout working. Format name (`single_tiff`) and filename regex match `cephla-lab/ndviewer_light` for ecosystem consistency.
