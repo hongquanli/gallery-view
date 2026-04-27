@@ -106,12 +106,18 @@ class SingleTiffHandler:
     def iter_z_slices(
         self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> Iterator[np.ndarray]:
+        # ``timepoint`` is reserved for the squid layout (Task 8); the
+        # legacy code path below always reads from ``<acq>/0/``. Until
+        # Task 8 wires it, ``cache_key`` includes ``/t<t>/`` but the
+        # underlying read does not — safe today because nothing passes a
+        # non-default timepoint, but watch this when squid layout lands.
         for f in self._tiffs_for(acq, fov, channel):
             yield imread(f).astype(np.float32)
 
     def load_full_stack(
         self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> np.ndarray:
+        # See iter_z_slices: ``timepoint`` is reserved for Task 8.
         tiffs = self._tiffs_for(acq, fov, channel)
         if not tiffs:
             raise FileNotFoundError(
