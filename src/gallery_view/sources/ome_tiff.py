@@ -102,44 +102,45 @@ class OmeTiffHandler:
     def load_full_stack(
         self, acq: Acquisition, fov: str, channel: Channel
     ) -> np.ndarray:
-        # ``series.asarray()`` reshapes pages into the declared
-        # ``DimensionOrder``; squid emits ``XYCZT`` for multi-channel
-        # acquisitions, which both AION/Cicero and XLight V3 store
-        # consistently with that declaration.
         ch_idx = self._channel_index(acq, channel)
         with TiffFile(acq.extra["ome_path"]) as tif:
             s = tif.series[0]
-            data = s.asarray()
-            axes = s.axes
-        return self._slice_channel(data, axes, ch_idx)
+            return self._read_channel_stack(tif, s.axes, s.shape, ch_idx)
 
     def iter_full_channel_stacks(
         self, acq: Acquisition, fov: str
     ) -> Iterator[tuple[Channel, np.ndarray]]:
-        """Load the OME-TIFF once, then yield each channel as a ZYX view.
+        """Yield ``(Channel, ZYX-stack)`` for each channel as an
+        **independent** contiguous array.
 
-        ``data[:, ch_idx, :, :]`` returns a numpy view that shares memory
-        with the parent ``data`` array — so the four channel views in a
-        4-channel acquisition all point at the same ~5GB buffer rather
-        than each holding its own copy.
+        Reading per-channel (rather than ``series.asarray()`` + a sliced
+        view) means each napari layer holds its own (nz, ny, nx) buffer.
+        When the user closes the 3D viewer, layers can be garbage-
+        collected individually instead of all four pinning a single
+        shared ~5 GB parent until the last reference drops.
         """
         with TiffFile(acq.extra["ome_path"]) as tif:
             s = tif.series[0]
-            data = s.asarray()
-            axes = s.axes
-        for ch_idx, channel in enumerate(acq.channels):
-            yield channel, self._slice_channel(data, axes, ch_idx)
+            axes, shape = s.axes, s.shape
+            for ch_idx, channel in enumerate(acq.channels):
+                yield channel, self._read_channel_stack(tif, axes, shape, ch_idx)
 
     @staticmethod
-    def _slice_channel(data: np.ndarray, axes: str, ch_idx: int) -> np.ndarray:
+    def _read_channel_stack(
+        tif: TiffFile, axes: str, shape: tuple, ch_idx: int
+    ) -> np.ndarray:
         if axes == "CYX":
-            return data[ch_idx][np.newaxis, :, :]
+            return tif.pages[ch_idx].asarray()[np.newaxis, :, :]
         if axes == "YX":
-            return data[np.newaxis, :, :]
+            return tif.pages[0].asarray()[np.newaxis, :, :]
         if axes in ("ZYX", "TYX"):
-            return data
+            nz = shape[0]
+            return np.stack([tif.pages[z].asarray() for z in range(nz)])
         if axes in ("ZCYX", "TCYX"):
-            return data[:, ch_idx, :, :]
+            nz, nc = shape[0], shape[1]
+            return np.stack([
+                tif.pages[z * nc + ch_idx].asarray() for z in range(nz)
+            ])
         raise ValueError(f"Unsupported OME-TIFF axes: {axes}")
 
     def channel_yaml_extras(

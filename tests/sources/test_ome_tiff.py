@@ -77,24 +77,25 @@ def test_channel_yaml_extras_returns_exposure_and_intensity(
     assert extras["intensity"] == 25.0
 
 
-def test_iter_full_channel_stacks_shares_buffer_across_channels(
+def test_iter_full_channel_stacks_yields_independent_buffers(
     handler, make_ome_tiff_acq
 ):
-    """All channel stacks must share one underlying numpy buffer, otherwise
-    we'd hold N copies of a multi-GB OME-TIFF in RAM (the original 30-GB
-    blowup on a 4-channel XLight V3 file). Different channel slices live
-    at different offsets in the same buffer, so ``may_share_memory`` is
-    the right check; ``shares_memory`` requires byte-level overlap."""
+    """Each channel stack must be its own contiguous buffer, not a slice
+    into a shared parent. Otherwise napari layers all pin a single
+    multi-GB OME-TIFF buffer for the lifetime of any one layer, and the
+    memory footprint doesn't drop when the user closes the 3D viewer."""
     folder = make_ome_tiff_acq(wavelengths=("488", "561", "638"), nz=3, ny=4, nx=5)
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
     pairs = list(handler.iter_full_channel_stacks(acq, "0"))
     assert len(pairs) == 3
-    # First channel's stack must share the parent buffer with the others.
     _, s0 = pairs[0]
     _, s1 = pairs[1]
     _, s2 = pairs[2]
-    assert np.may_share_memory(s0, s1)
-    assert np.may_share_memory(s0, s2)
+    assert not np.may_share_memory(s0, s1)
+    assert not np.may_share_memory(s0, s2)
+    # Each stack should own its data (no parent base).
+    for _, s in pairs:
+        assert s.base is None or s.base.base is None
 
 
 def test_iter_full_channel_stacks_yields_correct_channels(
