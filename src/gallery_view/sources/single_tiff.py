@@ -68,10 +68,7 @@ class SingleTiffHandler:
     def cache_key(
         self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> tuple[str, str]:
-        # ``timepoint`` is accepted for protocol compatibility; Task 4
-        # will fold it into the channel_id once the multi-timepoint
-        # discovery in Task 6/8 is in place.
-        return acq.path, f"fov{fov}/{channel.name}"
+        return acq.path, f"fov{fov}/t{timepoint}/{channel.name}"
 
     def iter_z_slices(
         self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"

@@ -57,6 +57,13 @@ def test_iter_z_slices_accepts_timepoint_kwarg(handler, make_ome_tiff_acq):
     assert len(slices) == 3
 
 
+def test_cache_key_includes_timepoint(handler, make_ome_tiff_acq):
+    folder = make_ome_tiff_acq(wavelengths=("488",))
+    acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
+    _, ch_id = handler.cache_key(acq, "0", acq.channels[0], timepoint="3")
+    assert "/t3/" in ch_id
+
+
 def test_cache_key_is_stable_and_distinct_per_channel(handler, make_ome_tiff_acq):
     folder = make_ome_tiff_acq(wavelengths=("488", "561"))
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
