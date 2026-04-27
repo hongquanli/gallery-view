@@ -64,12 +64,13 @@ class OmeTiffHandler:
         return None
 
     def cache_key(
-        self, acq: Acquisition, fov: str, channel: Channel
+        self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> tuple[str, str]:
+        # OME-TIFF stores all timepoints in one file; timepoint kwarg ignored.
         return acq.extra["ome_path"], f"fov{fov}/wl_{channel.wavelength}"
 
     def iter_z_slices(
-        self, acq: Acquisition, fov: str, channel: Channel
+        self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> Iterator[np.ndarray]:
         ome_path = acq.extra["ome_path"]
         ch_idx = self._channel_index(acq, channel)
@@ -100,7 +101,7 @@ class OmeTiffHandler:
             raise ValueError(f"Unsupported OME-TIFF axes: {axes}")
 
     def load_full_stack(
-        self, acq: Acquisition, fov: str, channel: Channel
+        self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> np.ndarray:
         ch_idx = self._channel_index(acq, channel)
         with TiffFile(acq.extra["ome_path"]) as tif:
@@ -108,7 +109,7 @@ class OmeTiffHandler:
             return self._read_channel_stack(tif, s.axes, s.shape, ch_idx)
 
     def iter_full_channel_stacks(
-        self, acq: Acquisition, fov: str
+        self, acq: Acquisition, fov: str, timepoint: str = "0"
     ) -> Iterator[tuple[Channel, np.ndarray]]:
         """Yield ``(Channel, ZYX-stack)`` for each channel as an
         **independent** contiguous array.

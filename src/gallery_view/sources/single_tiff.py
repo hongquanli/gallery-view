@@ -66,18 +66,21 @@ class SingleTiffHandler:
         return (len(tiffs), ny, nx)
 
     def cache_key(
-        self, acq: Acquisition, fov: str, channel: Channel
+        self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> tuple[str, str]:
+        # ``timepoint`` is accepted for protocol compatibility; Task 4
+        # will fold it into the channel_id once the multi-timepoint
+        # discovery in Task 6/8 is in place.
         return acq.path, f"fov{fov}/{channel.name}"
 
     def iter_z_slices(
-        self, acq: Acquisition, fov: str, channel: Channel
+        self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> Iterator[np.ndarray]:
         for f in self._tiffs_for(acq, fov, channel):
             yield imread(f).astype(np.float32)
 
     def load_full_stack(
-        self, acq: Acquisition, fov: str, channel: Channel
+        self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> np.ndarray:
         tiffs = self._tiffs_for(acq, fov, channel)
         if not tiffs:
@@ -87,13 +90,13 @@ class SingleTiffHandler:
         return np.stack([imread(f) for f in tiffs])
 
     def iter_full_channel_stacks(
-        self, acq: Acquisition, fov: str
+        self, acq: Acquisition, fov: str, timepoint: str = "0"
     ) -> Iterator[tuple[Channel, np.ndarray]]:
         # Each channel lives in its own set of TIFFs, so per-channel loading
         # is already memory-efficient — no shared parent buffer to worry
         # about. Just delegate to load_full_stack.
         for channel in acq.channels:
-            yield channel, self.load_full_stack(acq, fov, channel)
+            yield channel, self.load_full_stack(acq, fov, channel, timepoint=timepoint)
 
     def channel_yaml_extras(
         self, acq: Acquisition, channel: Channel

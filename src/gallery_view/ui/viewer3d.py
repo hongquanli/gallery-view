@@ -46,7 +46,9 @@ def open_napari(
     # per channel (~4× memory blowup for a 4-channel acquisition).
     channel_index = {c.name: i for i, c in enumerate(acq.channels)}
     try:
-        stack_iter = acq.handler.iter_full_channel_stacks(acq, fov)
+        stack_iter = acq.handler.iter_full_channel_stacks(
+            acq, fov, timepoint=acq.selected_timepoint
+        )
     except Exception:
         return
     for channel, stack in stack_iter:

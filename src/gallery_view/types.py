@@ -56,4 +56,6 @@ class Acquisition:
     fovs: list[str]
     shape_zyx: ShapeZYX | None = None
     selected_fov: str = "0"
+    timepoints: list[str] = field(default_factory=lambda: ["0"])
+    selected_timepoint: str = "0"
     extra: dict = field(default_factory=dict)
