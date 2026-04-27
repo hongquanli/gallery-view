@@ -53,22 +53,21 @@ class SingleTiffHandler:
     name = "single_tiff"
 
     def detect(self, folder: str) -> bool:
-        fov0 = os.path.join(folder, "0")
-        if not os.path.isdir(fov0):
-            return False
-        z0_tiffs = glob.glob(os.path.join(fov0, "current_0_0_*.tiff"))
-        # Treat as single_tiff iff > 1 distinct channel name at z=0
-        names = set()
-        for f in z0_tiffs:
-            m = re.search(r"current_0_0_(.+)\.tiff$", os.path.basename(f))
-            if m:
-                names.add(m.group(1))
-        return len(names) > 1
+        return self._detect_layout(folder) is not None
 
     def build(self, folder: str, params: dict) -> Acquisition | None:
+        layout = self._detect_layout(folder)
+        if layout is None:
+            return None
+        timepoints = self._timepoints_for(folder, layout)
+        if not timepoints:
+            return None
+        fovs = self._fovs_for(folder, layout, timepoints[0])
+        if not fovs:
+            return None
         channels = common.parse_acquisition_channels_yaml(folder)
         if not channels:
-            channels = self._channels_from_filenames(folder)
+            channels = self._channels_from_filenames(folder, layout, timepoints[0])
         if not channels:
             return None
         folder_name = os.path.basename(folder)
@@ -79,11 +78,15 @@ class SingleTiffHandler:
             display_name=common.display_name_for(folder_name),
             params=params,
             channels=channels,
-            fovs=["0"],
+            fovs=fovs,
+            selected_fov=fovs[0],
+            timepoints=timepoints,
+            selected_timepoint=timepoints[0],
+            extra={"layout": layout},
         )
 
     def list_fovs(self, acq: Acquisition) -> list[str]:
-        return ["0"]
+        return acq.fovs
 
     def read_shape(self, acq: Acquisition, fov: str) -> ShapeZYX | None:
         if not acq.channels:
@@ -157,14 +160,85 @@ class SingleTiffHandler:
         return files
 
     @staticmethod
-    def _channels_from_filenames(folder: str) -> list[Channel]:
-        z0_tiffs = glob.glob(os.path.join(folder, "0", "current_0_0_*.tiff"))
-        out: list[Channel] = []
-        for f in sorted(z0_tiffs):
-            m = re.search(r"current_0_0_(.+)\.tiff$", os.path.basename(f))
-            if not m:
+    def _detect_layout(folder: str) -> str | None:
+        """Return ``"squid"`` or ``"legacy"`` if folder matches; else None.
+
+        Tries legacy first because the squid regex's ``[^_]+`` region
+        group also matches a ``current`` prefix — order matters.
+        """
+        if not os.path.isdir(folder):
+            return None
+        # Legacy + squid both put files under <folder>/0/ when t=0.
+        zero_dir = os.path.join(folder, "0")
+        if os.path.isdir(zero_dir):
+            for f in glob.glob(os.path.join(zero_dir, "*.tiff")):
+                base = os.path.basename(f)
+                if parse_legacy_filename(base) is not None:
+                    return "legacy"
+                if parse_squid_filename(base) is not None:
+                    return "squid"
+        # Squid layout may also have <t>/ dirs other than 0 (multi-timepoint).
+        try:
+            entries = sorted(os.listdir(folder))
+        except OSError:
+            return None
+        for entry in entries:
+            if not entry.isdigit():
                 continue
-            name = m.group(1)
+            t_dir = os.path.join(folder, entry)
+            if not os.path.isdir(t_dir):
+                continue
+            for f in glob.glob(os.path.join(t_dir, "*.tiff")):
+                if parse_squid_filename(os.path.basename(f)) is not None:
+                    return "squid"
+        return None
+
+    @staticmethod
+    def _timepoints_for(folder: str, layout: str) -> list[str]:
+        if layout == "legacy":
+            return ["0"]
+        return sorted(
+            (e for e in os.listdir(folder)
+             if e.isdigit() and os.path.isdir(os.path.join(folder, e))),
+            key=int,
+        )
+
+    @staticmethod
+    def _fovs_for(folder: str, layout: str, timepoint: str) -> list[str]:
+        t_dir = os.path.join(folder, timepoint)
+        parser = (
+            parse_squid_filename if layout == "squid" else parse_legacy_filename
+        )
+        seen: set[tuple[str, str]] = set()
+        for f in glob.glob(os.path.join(t_dir, "*.tiff")):
+            p = parser(os.path.basename(f))
+            if p is None:
+                continue
+            region = p.get("region", "0")
+            seen.add((region, p["fov"]))
+        # Sort numerically when possible; fall back to lexicographic for
+        # well-as-region cases like "A1".
+        def sort_key(pair: tuple[str, str]) -> tuple:
+            r, f = pair
+            return (0 if r.isdigit() else 1, int(r) if r.isdigit() else r, int(f))
+        return [f"{r}_{f}" for r, f in sorted(seen, key=sort_key)]
+
+    @staticmethod
+    def _channels_from_filenames(
+        folder: str, layout: str, timepoint: str,
+    ) -> list[Channel]:
+        t_dir = os.path.join(folder, timepoint)
+        parser = (
+            parse_squid_filename if layout == "squid" else parse_legacy_filename
+        )
+        names: set[str] = set()
+        for f in glob.glob(os.path.join(t_dir, "*.tiff")):
+            p = parser(os.path.basename(f))
+            if p is None:
+                continue
+            names.add(p["channel"])
+        out: list[Channel] = []
+        for name in sorted(names):
             wl_m = re.search(r"(\d+)_nm", name)
             wl = wl_m.group(1) if wl_m else "unknown"
             out.append(Channel(name=name, wavelength=wl))
