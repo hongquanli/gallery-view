@@ -142,3 +142,19 @@ def test_legacy_build_uses_zero_region(handler, make_single_tiff_acq):
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
     assert acq is not None
     assert acq.fovs == ["0_0"]
+
+
+def test_build_discovers_multiple_timepoints(handler, make_squid_single_tiff_acq):
+    folder = make_squid_single_tiff_acq(nt=3)
+    acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
+    assert acq is not None
+    assert acq.timepoints == ["0", "1", "2"]
+    assert acq.selected_timepoint == "0"
+
+
+def test_legacy_acq_has_single_timepoint(handler, make_single_tiff_acq):
+    folder = make_single_tiff_acq()
+    acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
+    assert acq is not None
+    assert acq.timepoints == ["0"]
+    assert acq.selected_timepoint == "0"
