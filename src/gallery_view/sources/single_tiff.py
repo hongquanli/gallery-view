@@ -4,6 +4,7 @@ Layout: ``<acq>/0/current_0_<z>_<channel_name>.tiff`` — one TIFF per Z slice
 per channel, all in a single FOV directory.
 """
 
+import functools
 import glob
 import os
 import re
@@ -181,18 +182,29 @@ class SingleTiffHandler:
         return files
 
     @staticmethod
+    @functools.lru_cache(maxsize=128)
     def _detect_layout(folder: str) -> str | None:
         """Return ``"squid"`` or ``"legacy"`` if folder matches; else None.
 
         Tries legacy first because the squid regex's ``[^_]+`` region
         group also matches a ``current`` prefix — order matters.
+
+        ``glob.glob`` results are sorted so the "first matching file wins"
+        outcome is deterministic across filesystems (the glob's natural
+        order is filesystem-dependent on macOS/Linux).
+
+        Cached because ``scan.ingest`` calls ``handler.detect`` then
+        ``handler.build``, and ``build`` calls this again — without
+        memoization that's two filesystem walks per acquisition for every
+        drop. Cache lives for the process and is keyed by the raw folder
+        string; ``scan.ingest`` already deduplicates paths via realpath.
         """
         if not os.path.isdir(folder):
             return None
         # Legacy + squid both put files under <folder>/0/ when t=0.
         zero_dir = os.path.join(folder, "0")
         if os.path.isdir(zero_dir):
-            for f in glob.glob(os.path.join(zero_dir, "*.tiff")):
+            for f in sorted(glob.glob(os.path.join(zero_dir, "*.tiff"))):
                 base = os.path.basename(f)
                 if parse_legacy_filename(base) is not None:
                     return "legacy"
@@ -209,7 +221,7 @@ class SingleTiffHandler:
             t_dir = os.path.join(folder, entry)
             if not os.path.isdir(t_dir):
                 continue
-            for f in glob.glob(os.path.join(t_dir, "*.tiff")):
+            for f in sorted(glob.glob(os.path.join(t_dir, "*.tiff"))):
                 if parse_squid_filename(os.path.basename(f)) is not None:
                     return "squid"
         return None
