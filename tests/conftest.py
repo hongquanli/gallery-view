@@ -79,7 +79,7 @@ def make_ome_tiff_acq(tmp_path):
 
 
 @pytest.fixture
-def make_multi_channel_tiff_acq(tmp_path):
+def make_single_tiff_acq(tmp_path):
     """Build a per-Z-per-channel TIFF acquisition (``./0/current_0_<z>_<chname>.tiff``)."""
 
     def _build(

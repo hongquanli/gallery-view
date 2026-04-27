@@ -1,4 +1,4 @@
-"""Per-Z-per-channel TIFF handler for squid output.
+"""Single TIFF (individual-image-per-file) handler for squid output.
 
 Layout: ``<acq>/0/current_0_<z>_<channel_name>.tiff`` — one TIFF per Z slice
 per channel, all in a single FOV directory.
@@ -16,8 +16,8 @@ from ..types import Acquisition, Channel, ShapeZYX
 from . import _squid_common as common
 
 
-class MultiChannelTiffHandler:
-    name = "multi_channel_tiff"
+class SingleTiffHandler:
+    name = "single_tiff"
 
     def detect(self, folder: str) -> bool:
         fov0 = os.path.join(folder, "0")

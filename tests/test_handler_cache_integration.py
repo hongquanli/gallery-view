@@ -48,10 +48,10 @@ def test_ome_tiff_handler_cache_roundtrip(make_ome_tiff_acq):
     _roundtrip(handler, acq, "0", acq.channels[0])
 
 
-def test_multi_channel_tiff_handler_cache_roundtrip(make_multi_channel_tiff_acq):
-    from gallery_view.sources.multi_channel_tiff import MultiChannelTiffHandler
-    folder = make_multi_channel_tiff_acq(wavelengths=("488",), nz=3, ny=5, nx=6)
-    handler = MultiChannelTiffHandler()
+def test_single_tiff_handler_cache_roundtrip(make_single_tiff_acq):
+    from gallery_view.sources.single_tiff import SingleTiffHandler
+    folder = make_single_tiff_acq(wavelengths=("488",), nz=3, ny=5, nx=6)
+    handler = SingleTiffHandler()
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
     _roundtrip(handler, acq, "0", acq.channels[0])
 

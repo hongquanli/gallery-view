@@ -2,17 +2,17 @@
 returns the first one whose ``detect()`` returns True (or None).
 
 Order matters: ``ome_tiff`` is checked first because it's identified by a
-specific file path; ``multi_channel_tiff`` matches per-image-TIFF folders by
+specific file path; ``single_tiff`` matches per-image-TIFF folders by
 filename pattern.
 """
 
 from .base import FormatHandler
-from .multi_channel_tiff import MultiChannelTiffHandler
 from .ome_tiff import OmeTiffHandler
+from .single_tiff import SingleTiffHandler
 
 HANDLERS: list[FormatHandler] = [
     OmeTiffHandler(),
-    MultiChannelTiffHandler(),
+    SingleTiffHandler(),
 ]
 
 
