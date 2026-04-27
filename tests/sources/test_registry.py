@@ -9,10 +9,10 @@ def test_detect_returns_ome_tiff_handler(make_ome_tiff_acq):
     assert h.name == "ome_tiff"
 
 
-def test_detect_returns_multi_channel_handler(make_multi_channel_tiff_acq):
-    h = sources.detect(str(make_multi_channel_tiff_acq()))
+def test_detect_returns_single_tiff_handler(make_single_tiff_acq):
+    h = sources.detect(str(make_single_tiff_acq()))
     assert h is not None
-    assert h.name == "multi_channel_tiff"
+    assert h.name == "single_tiff"
 
 
 def test_detect_returns_none_for_unrelated_folder(tmp_path):

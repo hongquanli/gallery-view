@@ -33,7 +33,7 @@ The scanner auto-detects two squid output layouts:
 | Format               | Layout                                                                |
 |----------------------|-----------------------------------------------------------------------|
 | `ome_tiff`           | `<acq>/ome_tiff/current_0.ome.tiff` — one OME-TIFF holding every (z, channel) |
-| `multi_channel_tiff` | `<acq>/0/current_<fov>_<z>_<channel_name>.tiff` — one TIFF per (z, channel); folder contains multiple distinct channel names |
+| `single_tiff`        | `<acq>/0/current_<fov>_<z>_<channel_name>.tiff` — one TIFF per (z, channel); folder contains multiple distinct channel names |
 
 Channel metadata is read from `<acq>/acquisition_channels.yaml` when present
 and inferred from filenames otherwise.
