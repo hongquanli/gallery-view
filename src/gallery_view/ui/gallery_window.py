@@ -403,8 +403,8 @@ class GalleryWindow(QMainWindow):
 
         # Pass 1: compute visibility per row (don't trust ``isVisible()``,
         # which depends on the parent chain that we're about to update).
-        row_visible: dict[tuple[int, str], bool] = {}
-        for (acq_id, fov), rw in self.row_widgets.items():
+        row_visible: dict[tuple[int, str, str], bool] = {}
+        for (acq_id, t, fov), rw in self.row_widgets.items():
             acq = self.acquisitions[acq_id]
             visible = acq is not None
             if visible and self.mag_checkboxes:
@@ -412,7 +412,7 @@ class GalleryWindow(QMainWindow):
                 visible = mag in active_mags if mag is not None else True
             if visible and hide_thin and acq.shape_zyx is not None:
                 visible = acq.shape_zyx[0] >= THIN_Z_THRESHOLD
-            row_visible[(acq_id, fov)] = visible
+            row_visible[(acq_id, t, fov)] = visible
             rw.container.setVisible(visible)
 
         # Pass 2: hide source groups whose rows are all hidden.
@@ -421,8 +421,9 @@ class GalleryWindow(QMainWindow):
             if grp_idx >= len(self.source_groups):
                 continue
             any_visible = any(
-                row_visible.get((acq_id, fov), False)
+                row_visible.get((acq_id, self.acquisitions[acq_id].selected_timepoint, fov), False)
                 for acq_id in src.acq_ids
+                if self.acquisitions[acq_id] is not None
                 for fov in self._fovs_for_row(acq_id)
             )
             self.source_groups[grp_idx].setVisible(any_visible)
