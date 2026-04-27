@@ -38,11 +38,13 @@ class MipLoader(QThread):
         self._enqueued = 0
         self._cancelled_acqs: set[int] = set()
         self._stop = False
+        self._idle_emitted = False
 
     # ── public API (call from GUI thread) ──
 
     def enqueue(self, job: Job) -> None:
         self._enqueued += 1
+        self._idle_emitted = False
         self._queue.put(job)
 
     def cancel(self, acq_id: int) -> None:
@@ -60,7 +62,12 @@ class MipLoader(QThread):
             try:
                 job = self._queue.get(timeout=0.25)
             except queue.Empty:
-                if self._enqueued and self._done >= self._enqueued:
+                if (
+                    self._enqueued
+                    and self._done >= self._enqueued
+                    and not self._idle_emitted
+                ):
+                    self._idle_emitted = True
                     self.idle.emit()
                 continue
             if job is None:
@@ -94,9 +101,16 @@ class MipLoader(QThread):
         n = 0
         ny = nx = 0
         for slice_yx in job.acq.handler.iter_z_slices(job.acq, job.fov, job.channel):
+            if n == 0:
+                ny, nx = slice_yx.shape
+            elif slice_yx.shape != (ny, nx):
+                # squid never produces heterogeneous slice shapes; bail out
+                # rather than computing a meaningless MIP.
+                raise ValueError(
+                    f"Slice shape changed mid-stack: expected {(ny, nx)}, got {slice_yx.shape}"
+                )
             mips.accumulate_axes(slice_yx, state)
             n += 1
-            ny, nx = slice_yx.shape
         finalized = mips.finalize(state)
         if finalized is None:
             self._done += 1

@@ -1,5 +1,11 @@
 """Folder ingestion: walk dropped paths, dispatch to handlers, merge
-single-channel siblings into logical multi-channel acquisitions."""
+single-channel siblings into logical multi-channel acquisitions.
+
+The scanner is the one place outside ``sources/`` that legitimately
+branches on ``handler.name``: single-channel folders need to be grouped
+by ``(mag, well)`` before being turned into one logical multi-channel
+``Acquisition``, which is a scanner-level concern, not a handler one.
+"""
 
 import os
 from collections import defaultdict
@@ -29,13 +35,13 @@ def ingest(
     """
     if _seen is None:
         _seen = set()
+
+    if not os.path.isdir(path) or os.path.islink(path) or _is_hidden(path):
+        return []
     real = os.path.realpath(path)
     if real in _seen:
         return []
     _seen.add(real)
-
-    if not os.path.isdir(path) or os.path.islink(path) or _is_hidden(path):
-        return []
 
     handler = sources.detect(path)
     if handler is not None and handler.name != "single_channel_tiff":
@@ -46,10 +52,16 @@ def ingest(
     if _depth >= MAX_DEPTH:
         return []
 
+    try:
+        entries = sorted(os.listdir(path))
+    except OSError:
+        # Unreadable directory (permissions, transient FS) — skip silently.
+        return []
+
     out: list[Acquisition] = []
     single_channel_buckets: dict[tuple[int, str], list[str]] = defaultdict(list)
 
-    for entry in sorted(os.listdir(path)):
+    for entry in entries:
         sub = os.path.join(path, entry)
         if _is_hidden(sub) or not os.path.isdir(sub) or os.path.islink(sub):
             continue

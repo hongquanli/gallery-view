@@ -61,3 +61,30 @@ def test_ingest_merges_single_channel_siblings(make_single_channel_tiff_acq):
     assert {c.wavelength for c in merged.channels} == {"488", "638"}
     assert "488" in merged.extra["channel_paths"]
     assert "638" in merged.extra["channel_paths"]
+
+
+def test_ingest_skips_unreadable_subdir(tmp_path, make_ome_tiff_acq, monkeypatch):
+    """If ``os.listdir`` raises (permissions, transient FS), the walker
+    silently skips the offending dir rather than crashing."""
+    make_ome_tiff_acq(folder_name="25x_A1_2026-04-26_12-00-00.000000")
+
+    real_listdir = os.listdir
+
+    def selectively_raise(p):
+        if os.path.realpath(p) == os.path.realpath(str(tmp_path)):
+            raise PermissionError("simulated unreadable dir")
+        return real_listdir(p)
+
+    monkeypatch.setattr(os, "listdir", selectively_raise)
+    assert scan.ingest(str(tmp_path)) == []
+
+
+def test_ingest_can_be_re_called_after_completion(make_ome_tiff_acq):
+    """A fresh ``ingest`` call with a fresh ``_seen`` re-discovers the same
+    acquisition — important for the gallery's "remove then re-add" flow,
+    which doesn't share ``_seen`` across drops."""
+    folder = make_ome_tiff_acq()
+    a1 = scan.ingest(str(folder))
+    a2 = scan.ingest(str(folder))
+    assert len(a1) == 1
+    assert len(a2) == 1

@@ -51,6 +51,11 @@ class OmeTiffHandler:
                 axes, shape = s.axes, s.shape
                 if axes == "CYX":
                     return (1, shape[1], shape[2])
+                if axes in ("ZYX", "TYX"):
+                    # Single-channel z-stack; tifffile drops the size-1 C axis.
+                    return (shape[0], shape[1], shape[2])
+                if axes == "YX":
+                    return (1, shape[0], shape[1])
                 if axes in ("ZCYX", "TCYX"):
                     return (shape[0], shape[2], shape[3])
         except (OSError, ValueError, IndexError):
@@ -73,6 +78,19 @@ class OmeTiffHandler:
             if axes == "CYX":
                 yield tif.pages[ch_idx].asarray().astype(np.float32)
                 return
+            if axes == "YX":
+                yield tif.pages[0].asarray().astype(np.float32)
+                return
+            # tifffile drops size-1 C axes on read, so a (nz, 1, ny, nx) ZCYX
+            # file comes back as ZYX. Handle the single-channel case explicitly.
+            if axes in ("ZYX", "TYX"):
+                nz = shape[0]
+                for z in range(nz):
+                    yield tif.pages[z].asarray().astype(np.float32)
+                return
+            # TCYX is treated identically to ZCYX: squid v1 only writes
+            # single-timepoint TCYX, where the T-axis is effectively the
+            # Z-axis. Multi-timepoint OME-TIFFs are out of scope.
             if axes in ("ZCYX", "TCYX"):
                 nz, nc = shape[0], shape[1]
                 for z in range(nz):
@@ -89,6 +107,10 @@ class OmeTiffHandler:
             axes = tif.series[0].axes
         if axes == "CYX":
             return data[ch_idx][np.newaxis, :, :]
+        if axes == "YX":
+            return data[np.newaxis, :, :]
+        if axes in ("ZYX", "TYX"):
+            return data
         if axes in ("ZCYX", "TCYX"):
             return data[:, ch_idx, :, :]
         raise ValueError(f"Unsupported OME-TIFF axes: {axes}")
@@ -113,11 +135,14 @@ class OmeTiffHandler:
             with TiffFile(ome_path) as tif:
                 s = tif.series[0]
                 axes, shape = s.axes, s.shape
-                nc = (
-                    shape[1]
-                    if axes in ("ZCYX", "TCYX")
-                    else (shape[0] if axes == "CYX" else 0)
-                )
+                if axes in ("ZCYX", "TCYX"):
+                    nc = shape[1]
+                elif axes == "CYX":
+                    nc = shape[0]
+                elif axes in ("YX", "ZYX", "TYX"):
+                    nc = 1  # tifffile collapsed a size-1 C axis on read
+                else:
+                    nc = 0
         except (OSError, ValueError, IndexError):
             return []
         return [Channel(name=f"channel_{i}", wavelength="unknown") for i in range(nc)]

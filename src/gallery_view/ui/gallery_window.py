@@ -22,6 +22,7 @@ from qtpy.QtWidgets import (
 from .. import scan
 from ..loader import Job, MipLoader
 from ..mips import mip_to_rgba
+from ..sources._squid_common import parse_mag, parse_timestamp
 from ..types import Acquisition, AxisMip
 from .colors import CHANNEL_ORDER, rgb_for
 
@@ -65,7 +66,7 @@ class GalleryWindow(QMainWindow):
             "QLabel { color: white; }"
         )
 
-        self.acquisitions: list[Acquisition] = []
+        self.acquisitions: list[Acquisition | None] = []
         self.sources: list[Source] = []
         self.row_keys: list[RowKey] = []
         self.row_widgets: dict[tuple[int, str], RowWidgets] = {}
@@ -194,7 +195,6 @@ class GalleryWindow(QMainWindow):
 
     def _build_menus(self) -> None:
         from qtpy.QtGui import QAction
-        from qtpy.QtWidgets import QFileDialog, QMessageBox
 
         menubar = self.menuBar()
         menubar.setStyleSheet(
@@ -447,9 +447,6 @@ class GalleryWindow(QMainWindow):
         return ordered + extras
 
     def _make_row_widget(self, key, acq, active_wls):
-        from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QLabel, QPushButton, QComboBox
-        from ..sources._squid_common import parse_timestamp, parse_mag
-
         container = QWidget()
         h = QHBoxLayout(container)
         h.setContentsMargins(4, 2, 4, 2)
@@ -573,7 +570,6 @@ class GalleryWindow(QMainWindow):
         if acq is None:
             return 1.0
         sensor_pixel_um = acq.params.get("sensor_pixel_size_um", 6.5)
-        from ..sources._squid_common import parse_mag
         mag = parse_mag(acq.folder_name) or acq.params.get("mag") or 1
         pixel_um = sensor_pixel_um / mag if mag else sensor_pixel_um
         dz_um = acq.params.get("dz(um)", pixel_um)
@@ -597,9 +593,18 @@ class GalleryWindow(QMainWindow):
 
     def _apply_label_sizes(self) -> None:
         for (acq_id, fov), rw in self.row_widgets.items():
-            w, h = self._row_label_size(acq_id, fov)
-            for thumb in rw.thumb_columns.values():
-                thumb.setFixedSize(w, h)
+            self._apply_label_sizes_for(acq_id, fov, rw)
+
+    def _apply_label_sizes_for(self, acq_id, fov, rw=None) -> None:
+        """Resize thumb cells in one row only — used when shape_zyx becomes
+        known and only that row's aspect changes."""
+        if rw is None:
+            rw = self.row_widgets.get((acq_id, fov))
+            if rw is None:
+                return
+        w, h = self._row_label_size(acq_id, fov)
+        for thumb in rw.thumb_columns.values():
+            thumb.setFixedSize(w, h)
 
     def _render_thumb(self, acq_id, fov, ch_idx, ax_mip) -> None:
         rw = self.row_widgets.get((acq_id, fov))
@@ -625,14 +630,16 @@ class GalleryWindow(QMainWindow):
         if acq_id >= len(self.acquisitions) or self.acquisitions[acq_id] is None:
             return
         acq = self.acquisitions[acq_id]
-        if shape is not None and acq.shape_zyx is None:
+        shape_was_unknown = acq.shape_zyx is None
+        if shape is not None and shape_was_unknown:
             acq.shape_zyx = shape
         for axis, ax_mip in channel_mips.items():
             self.mip_data[(acq_id, fov, ch_idx, axis)] = ax_mip
         if self.view_axis in channel_mips:
             self._render_thumb(acq_id, fov, ch_idx, channel_mips[self.view_axis])
-        # Aspect may now be known; re-size labels in this row
-        self._apply_label_sizes()
+        # Aspect may have become known for this row; resize only this row.
+        if shape_was_unknown and acq.shape_zyx is not None:
+            self._apply_label_sizes_for(acq_id, fov)
 
     def _on_progress(self, done, queued, message) -> None:
         self.status.setText(f"{done}/{queued} channels — {message}")
