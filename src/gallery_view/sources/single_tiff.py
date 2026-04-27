@@ -86,9 +86,6 @@ class SingleTiffHandler:
             extra={"layout": layout},
         )
 
-    def list_fovs(self, acq: Acquisition) -> list[str]:
-        return acq.fovs
-
     def read_shape(self, acq: Acquisition, fov: str) -> ShapeZYX | None:
         if not acq.channels:
             return None

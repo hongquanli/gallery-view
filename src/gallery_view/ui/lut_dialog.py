@@ -22,7 +22,7 @@ from qtpy.QtWidgets import (
 
 from .. import cache
 from ..mips import mip_to_rgba
-from ..sources._squid_common import parse_mag
+from ..sources._squid_common import display_fov, parse_mag
 from ..types import Acquisition, AxisMip
 from .colors import rgb_for
 from .zoomable_view import ZoomableImageView
@@ -66,7 +66,7 @@ def show_lut_dialog(
     dlg = QDialog(parent)
     mag = parse_mag(acq.folder_name) or "?"
     dlg.setWindowTitle(
-        f"LUT — {acq.display_name} | {mag}x | FOV {fov} | {axis_label}"
+        f"LUT — {acq.display_name} | {mag}x | FOV {display_fov(fov)} | {axis_label}"
     )
     dlg.setStyleSheet("background-color: #1e1e1e; color: white;")
 
@@ -268,7 +268,7 @@ def _export_png(
     datetime_str = f"{ts.group(1)} {ts.group(2)}:{ts.group(3)}" if ts else ""
     ts_part = f"_{ts.group(1)}_{ts.group(2)}{ts.group(3)}" if ts else ""
     safe_name = acq.display_name.replace(" ", "_").replace("/", "_")
-    default_name = f"{safe_name}_{axis}_fov{fov}{ts_part}.png"
+    default_name = f"{safe_name}_{axis}_fov{display_fov(fov)}{ts_part}.png"
     path, _ = QFileDialog.getSaveFileName(dlg, "Export view", default_name, "PNG (*.png)")
     if not path:
         return
@@ -332,7 +332,7 @@ def _export_png(
         for spine in ax_hist.spines.values():
             spine.set_color("#666")
 
-    title_main = f"{acq.display_name} | FOV {fov} | {axis_label}"
+    title_main = f"{acq.display_name} | FOV {display_fov(fov)} | {axis_label}"
     fig.text(0.5, 0.985, title_main, ha="center", va="top", fontsize=13, color="white")
     if datetime_str:
         fig.text(0.5, 0.96, datetime_str, ha="center", va="top", fontsize=11, color="#888")
