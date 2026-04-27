@@ -1,7 +1,6 @@
 """OME-TIFF handler for squid output (axes ZCYX, TCYX, or CYX)."""
 
 from typing import Iterator
-from xml.etree import ElementTree as ET
 
 import numpy as np
 from tifffile import TiffFile
@@ -10,43 +9,6 @@ from ..types import Acquisition, Channel, ShapeZYX
 from . import _squid_common as common
 
 OME_PATH = ("ome_tiff", "current_0.ome.tiff")
-
-
-def _build_page_map(ome_xml: str | None) -> dict[tuple[int, int, int], int] | None:
-    """Parse OME ``Plane`` tags into a ``(t, z, c) → page_idx`` map.
-
-    The OME spec lets a writer declare a ``DimensionOrder`` (e.g. ``XYCZT``)
-    while actually storing pages in some other order — every page carries
-    explicit ``TheT``/``TheZ``/``TheC`` attributes that authoritatively
-    locate it. squid (via tifffile) emits ``DimensionOrder="XYCZT"`` for
-    multi-channel stacks but the XLight V3 path stores pages C-major
-    (per-channel blocks of Z slices), so a ``page = z*nc + c`` formula
-    reads from the wrong channel.
-
-    Returns ``None`` when the XML is absent or has no Plane tags; callers
-    must fall back to the DimensionOrder-implied formula.
-    """
-    if not ome_xml:
-        return None
-    try:
-        root = ET.fromstring(ome_xml)
-    except ET.ParseError:
-        return None
-    out: dict[tuple[int, int, int], int] = {}
-    idx = 0
-    for elem in root.iter():
-        tag = elem.tag.rsplit("}", 1)[-1]  # strip namespace
-        if tag != "Plane":
-            continue
-        try:
-            t = int(elem.attrib.get("TheT", "0"))
-            z = int(elem.attrib.get("TheZ", "0"))
-            c = int(elem.attrib.get("TheC", "0"))
-        except ValueError:
-            return None
-        out[(t, z, c)] = idx
-        idx += 1
-    return out or None
 
 
 class OmeTiffHandler:
@@ -68,19 +30,6 @@ class OmeTiffHandler:
         if not channels:
             return None
 
-        # Build the (t, z, c) -> page_idx map once per acquisition; iter and
-        # full-stack readers use it to find each plane's actual storage page.
-        page_map: dict[tuple[int, int, int], int] | None = None
-        try:
-            with TiffFile(ome_path) as tif:
-                page_map = _build_page_map(tif.ome_metadata)
-        except (OSError, ValueError, IndexError):
-            page_map = None
-
-        extra: dict = {"ome_path": ome_path}
-        if page_map is not None:
-            extra["page_map"] = page_map
-
         folder_name = os.path.basename(folder)
         return Acquisition(
             handler=self,
@@ -90,7 +39,7 @@ class OmeTiffHandler:
             params=params,
             channels=channels,
             fovs=["0"],
-            extra=extra,
+            extra={"ome_path": ome_path},
         )
 
     def list_fovs(self, acq: Acquisition) -> list[str]:
@@ -124,7 +73,6 @@ class OmeTiffHandler:
     ) -> Iterator[np.ndarray]:
         ome_path = acq.extra["ome_path"]
         ch_idx = self._channel_index(acq, channel)
-        page_map = acq.extra.get("page_map")
         with TiffFile(ome_path) as tif:
             s = tif.series[0]
             axes, shape = s.axes, s.shape
@@ -147,39 +95,17 @@ class OmeTiffHandler:
             if axes in ("ZCYX", "TCYX"):
                 nz, nc = shape[0], shape[1]
                 for z in range(nz):
-                    page = self._page_index(page_map, z, ch_idx, nc)
-                    yield tif.pages[page].asarray().astype(np.float32)
+                    yield tif.pages[z * nc + ch_idx].asarray().astype(np.float32)
                 return
             raise ValueError(f"Unsupported OME-TIFF axes: {axes}")
-
-    @staticmethod
-    def _page_index(
-        page_map: dict[tuple[int, int, int], int] | None,
-        z: int,
-        c: int,
-        nc: int,
-    ) -> int:
-        """Return the storage-page index for ``(t=0, z, c)``.
-
-        Prefers the OME ``Plane``-tag map when present; falls back to the
-        ``DimensionOrder="XYCZT"`` formula (channels-fast within Z) used by
-        most squid OME-TIFFs that lack Plane tags.
-        """
-        if page_map is not None:
-            page = page_map.get((0, z, c))
-            if page is not None:
-                return page
-        return z * nc + c
 
     def load_full_stack(
         self, acq: Acquisition, fov: str, channel: Channel
     ) -> np.ndarray:
-        # Single-channel callers: ``series.asarray()`` reads the OME Plane
-        # metadata internally and reshapes pages into logical ZCYX/TCYX
-        # order, which matters for files like XLight V3 that declare
-        # ``DimensionOrder="XYCZT"`` but store pages C-major. Multi-channel
-        # callers should use :py:meth:`iter_full_channel_stacks` to avoid
-        # reloading the full file once per channel.
+        # ``series.asarray()`` reshapes pages into the declared
+        # ``DimensionOrder``; squid emits ``XYCZT`` for multi-channel
+        # acquisitions, which both AION/Cicero and XLight V3 store
+        # consistently with that declaration.
         ch_idx = self._channel_index(acq, channel)
         with TiffFile(acq.extra["ome_path"]) as tif:
             s = tif.series[0]
