@@ -109,22 +109,16 @@ class SingleTiffHandler:
     def iter_z_slices(
         self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> Iterator[np.ndarray]:
-        # ``timepoint`` is reserved for the squid layout (Task 8); the
-        # legacy code path below always reads from ``<acq>/0/``. Until
-        # Task 8 wires it, ``cache_key`` includes ``/t<t>/`` but the
-        # underlying read does not — safe today because nothing passes a
-        # non-default timepoint, but watch this when squid layout lands.
-        for f in self._tiffs_for(acq, fov, channel):
+        for f in self._tiffs_for(acq, fov, channel, timepoint=timepoint):
             yield imread(f).astype(np.float32)
 
     def load_full_stack(
         self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> np.ndarray:
-        # See iter_z_slices: ``timepoint`` is reserved for Task 8.
-        tiffs = self._tiffs_for(acq, fov, channel)
+        tiffs = self._tiffs_for(acq, fov, channel, timepoint=timepoint)
         if not tiffs:
             raise FileNotFoundError(
-                f"No TIFFs for {channel.name!r} in {acq.path}"
+                f"No TIFFs for {channel.name!r} at fov={fov!r} t={timepoint!r}"
             )
         return np.stack([imread(f) for f in tiffs])
 
@@ -146,17 +140,44 @@ class SingleTiffHandler:
 
     @staticmethod
     def _tiffs_for(
-        acq: Acquisition, fov: str, channel: Channel
+        acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0",
     ) -> list[str]:
+        """Return z-sorted TIFF paths for one (timepoint, fov, channel).
+
+        ``fov`` is the composite ``"<region>_<fov>"`` string from
+        ``acq.fovs``; for legacy folders the region is always ``"0"``.
+        """
+        layout = acq.extra.get("layout", "legacy")
+        region, fov_idx = fov.split("_", 1) if "_" in fov else ("0", fov)
         pattern = channel.name.replace(" ", "_")
-        files = glob.glob(
-            os.path.join(acq.path, fov, f"current_{fov}_*_{pattern}.tiff")
-        )
-        files.sort(
-            key=lambda f: int(
-                re.search(r"current_\d+_(\d+)_", os.path.basename(f)).group(1)
+        t_dir = os.path.join(acq.path, timepoint)
+        if layout == "squid":
+            parser = parse_squid_filename
+            # Glob anchors the channel suffix; the leading prefix may include
+            # an optional well, so we filter by parsing each match to confirm
+            # (region, fov) and discard collisions.
+            files = []
+            for f in glob.glob(os.path.join(t_dir, f"*_{pattern}.tiff")):
+                p = parser(os.path.basename(f))
+                if p is None:
+                    continue
+                if p["region"] == region and p["fov"] == fov_idx:
+                    files.append(f)
+        else:
+            files = glob.glob(
+                os.path.join(t_dir, f"current_{fov_idx}_*_{pattern}.tiff")
             )
-        )
+
+        def z_of(path: str) -> int:
+            base = os.path.basename(path)
+            p = (
+                parse_squid_filename(base)
+                if layout == "squid"
+                else parse_legacy_filename(base)
+            )
+            return int(p["z"]) if p else 0
+
+        files.sort(key=z_of)
         return files
 
     @staticmethod

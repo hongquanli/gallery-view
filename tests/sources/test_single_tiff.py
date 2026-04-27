@@ -158,3 +158,45 @@ def test_legacy_acq_has_single_timepoint(handler, make_single_tiff_acq):
     assert acq is not None
     assert acq.timepoints == ["0"]
     assert acq.selected_timepoint == "0"
+
+
+# ── timepoint plumbing through iter helpers ─────────────────────────────────
+
+
+def test_iter_z_slices_uses_timepoint(handler, make_squid_single_tiff_acq):
+    """Slices for timepoint='1' must come from <acq>/1/, not <acq>/0/."""
+    folder = make_squid_single_tiff_acq(nt=2, nz=3)
+    acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
+    slices_t0 = list(handler.iter_z_slices(acq, "0_0", acq.channels[0], timepoint="0"))
+    slices_t1 = list(handler.iter_z_slices(acq, "0_0", acq.channels[0], timepoint="1"))
+    assert len(slices_t0) == 3
+    assert len(slices_t1) == 3
+
+
+def test_iter_z_slices_unknown_timepoint_returns_empty(
+    handler, make_squid_single_tiff_acq,
+):
+    folder = make_squid_single_tiff_acq(nt=1)
+    acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
+    slices = list(handler.iter_z_slices(acq, "0_0", acq.channels[0], timepoint="42"))
+    assert slices == []
+
+
+def test_load_full_stack_uses_timepoint(handler, make_squid_single_tiff_acq):
+    folder = make_squid_single_tiff_acq(nt=2, nz=3, ny=8, nx=10)
+    acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
+    stack = handler.load_full_stack(acq, "0_0", acq.channels[0], timepoint="1")
+    assert stack.shape == (3, 8, 10)
+
+
+def test_squid_iter_z_slices_picks_correct_fov(
+    handler, make_squid_single_tiff_acq,
+):
+    """With multiple regions/fovs, ``iter_z_slices`` must scope to the
+    requested composite FOV only."""
+    folder = make_squid_single_tiff_acq(regions=2, fovs_per_region=2, nz=3)
+    acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
+    slices_0_0 = list(handler.iter_z_slices(acq, "0_0", acq.channels[0]))
+    slices_1_1 = list(handler.iter_z_slices(acq, "1_1", acq.channels[0]))
+    assert len(slices_0_0) == 3
+    assert len(slices_1_1) == 3
