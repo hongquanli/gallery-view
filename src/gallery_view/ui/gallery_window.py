@@ -264,12 +264,48 @@ class GalleryWindow(QMainWindow):
     # ── stub hooks filled in by later tasks ──
 
     def _rebuild_mag_filter(self) -> None:
-        # Filled in by Task 20.
-        pass
+        from ..sources._squid_common import parse_mag
+
+        # Collect distinct mags from current acquisitions
+        mags = set()
+        for acq in self.acquisitions:
+            if acq is None:
+                continue
+            mag = parse_mag(acq.folder_name)
+            if mag is not None:
+                mags.add(mag)
+
+        # Tear down old checkboxes
+        for cb in list(self.mag_checkboxes.values()):
+            self.mag_row_layout.removeWidget(cb)
+            cb.deleteLater()
+        self.mag_checkboxes.clear()
+
+        if len(mags) <= 1:
+            return  # hide the filter when only one mag is present
+
+        for mag in sorted(mags):
+            cb = QCheckBox(f"{mag}x")
+            cb.setChecked(True)
+            cb.setStyleSheet("QCheckBox { color: #ccc; font-size: 11px; }")
+            cb.stateChanged.connect(self._refresh_visibility)
+            self.mag_row_layout.addWidget(cb)
+            self.mag_checkboxes[mag] = cb
 
     def _refresh_visibility(self) -> None:
-        # Filled in by Task 20.
-        pass
+        from ..sources._squid_common import parse_mag
+
+        active_mags = {m for m, cb in self.mag_checkboxes.items() if cb.isChecked()}
+        hide_thin = self.hide_thin_btn.isChecked()
+        for (acq_id, fov), rw in self.row_widgets.items():
+            acq = self.acquisitions[acq_id]
+            visible = acq is not None
+            if visible and self.mag_checkboxes:
+                mag = parse_mag(acq.folder_name)
+                visible = mag in active_mags if mag is not None else True
+            if visible and hide_thin and acq.shape_zyx is not None:
+                visible = acq.shape_zyx[0] >= THIN_Z_THRESHOLD
+            rw.container.setVisible(visible)
 
     # ── row rendering ──
 
