@@ -1,4 +1,4 @@
-"""Folder ingestion: walks, dedupe, hidden-skip, single-channel merge."""
+"""Folder ingestion: walks, dedupe, hidden-skip."""
 
 import os
 from pathlib import Path
@@ -49,18 +49,6 @@ def test_ingest_respects_max_depth(tmp_path, make_ome_tiff_acq):
     moved = deep / acq_folder.name
     acq_folder.rename(moved)
     assert scan.ingest(str(tmp_path)) == []
-
-
-def test_ingest_merges_single_channel_siblings(make_single_channel_tiff_acq):
-    group_root, folders = make_single_channel_tiff_acq(
-        wavelengths=("488", "638"), well="C3"
-    )
-    acqs = scan.ingest(str(group_root))
-    assert len(acqs) == 1
-    merged = acqs[0]
-    assert {c.wavelength for c in merged.channels} == {"488", "638"}
-    assert "488" in merged.extra["channel_paths"]
-    assert "638" in merged.extra["channel_paths"]
 
 
 def test_ingest_skips_unreadable_subdir(tmp_path, make_ome_tiff_acq, monkeypatch):

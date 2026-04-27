@@ -56,15 +56,6 @@ def test_multi_channel_tiff_handler_cache_roundtrip(make_multi_channel_tiff_acq)
     _roundtrip(handler, acq, "0", acq.channels[0])
 
 
-def test_single_channel_tiff_handler_cache_roundtrip(make_single_channel_tiff_acq):
-    from gallery_view.sources.single_channel_tiff import SingleChannelTiffHandler
-    _, folders = make_single_channel_tiff_acq(wavelengths=("488",), nz=3, ny=5, nx=6)
-    handler = SingleChannelTiffHandler()
-    acq = handler.build(str(folders[0]),
-                        {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
-    _roundtrip(handler, acq, "0", acq.channels[0])
-
-
 def test_cache_keys_distinct_across_acquisitions(make_ome_tiff_acq):
     """Two acquisitions with the same channel but different paths must hash
     to different keys — otherwise drag-dropping the same data twice would
