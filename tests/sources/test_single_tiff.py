@@ -11,7 +11,7 @@ def handler():
     return SingleTiffHandler()
 
 
-def test_detect_returns_true_for_multi_channel(handler, make_single_tiff_acq):
+def test_detect_returns_true_for_single_tiff_acq(handler, make_single_tiff_acq):
     folder = make_single_tiff_acq()
     assert handler.detect(str(folder)) is True
 

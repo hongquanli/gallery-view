@@ -24,7 +24,7 @@ class SingleTiffHandler:
         if not os.path.isdir(fov0):
             return False
         z0_tiffs = glob.glob(os.path.join(fov0, "current_0_0_*.tiff"))
-        # Multi-channel iff > 1 distinct channel name at z=0
+        # Treat as single_tiff iff > 1 distinct channel name at z=0
         names = set()
         for f in z0_tiffs:
             m = re.search(r"current_0_0_(.+)\.tiff$", os.path.basename(f))
