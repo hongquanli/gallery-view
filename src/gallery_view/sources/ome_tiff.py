@@ -174,24 +174,25 @@ class OmeTiffHandler:
     def load_full_stack(
         self, acq: Acquisition, fov: str, channel: Channel
     ) -> np.ndarray:
+        # Use ``series.asarray()`` rather than per-page reads: tifffile
+        # consults the OME metadata to reorder pages into logical
+        # ``ZCYX``/``TCYX`` order, which matters for files like XLight V3
+        # that declare ``DimensionOrder="XYCZT"`` but store pages C-major.
+        # ``series[0]`` always returns the first ``Image`` element's data,
+        # not raw storage pages. This mirrors aion-explorer's approach.
         ch_idx = self._channel_index(acq, channel)
-        page_map = acq.extra.get("page_map")
         with TiffFile(acq.extra["ome_path"]) as tif:
             s = tif.series[0]
-            axes, shape = s.axes, s.shape
-            if axes == "CYX":
-                return tif.pages[ch_idx].asarray()[np.newaxis, :, :]
-            if axes == "YX":
-                return tif.pages[0].asarray()[np.newaxis, :, :]
-            if axes in ("ZYX", "TYX"):
-                nz = shape[0]
-                return np.stack([tif.pages[z].asarray() for z in range(nz)])
-            if axes in ("ZCYX", "TCYX"):
-                nz, nc = shape[0], shape[1]
-                return np.stack([
-                    tif.pages[self._page_index(page_map, z, ch_idx, nc)].asarray()
-                    for z in range(nz)
-                ])
+            data = s.asarray()
+            axes = s.axes
+        if axes == "CYX":
+            return data[ch_idx][np.newaxis, :, :]
+        if axes == "YX":
+            return data[np.newaxis, :, :]
+        if axes in ("ZYX", "TYX"):
+            return data
+        if axes in ("ZCYX", "TCYX"):
+            return data[:, ch_idx, :, :]
         raise ValueError(f"Unsupported OME-TIFF axes: {axes}")
 
     def channel_yaml_extras(

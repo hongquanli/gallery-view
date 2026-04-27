@@ -50,10 +50,6 @@ def open_napari(
                 float(np.percentile(stack, 1)),
                 float(np.percentile(stack, 99.9)),
             )
-        # ``rendering="mip"`` makes 3D show a max projection through depth
-        # rather than per-slice planes; ``interpolation3d="linear"`` smooths
-        # voxel boundaries so anisotropic stacks (e.g. XLight V3 z=5µm vs
-        # xy=0.26µm) don't render as visible Z-slice stripes.
         viewer.add_image(
             stack,
             scale=scale,
@@ -61,8 +57,6 @@ def open_napari(
             colormap=napari_cmap_for(channel.wavelength),
             blending="additive",
             contrast_limits=clim,
-            rendering="mip",
-            interpolation3d="linear",
         )
         if first_shape is None:
             first_shape = stack.shape
@@ -77,12 +71,6 @@ def open_napari(
     viewer.text_overlay.position = "top_center"
     viewer.scale_bar.visible = True
     viewer.scale_bar.unit = "um"
-
-    # Land the camera looking straight down Z so the user sees a clean MIP
-    # on first paint. They can still rotate; we just don't want the default
-    # tilt to expose Z-slice planes for highly-anisotropic volumes.
-    viewer.camera.angles = (0.0, 0.0, 90.0)
-    viewer.reset_view()
 
 
 def _add_bounding_box(viewer, scale, shape_zyx) -> None:
