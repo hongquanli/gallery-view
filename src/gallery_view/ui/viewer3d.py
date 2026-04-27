@@ -4,6 +4,7 @@ Loads each channel's full ZYX stack via the handler, scales axes to µm,
 adds a 100 µm-tick bounding box overlay, and reuses LUT limits from the
 gallery's currently displayed projection axis (with sensible fallbacks)."""
 
+import gc
 from typing import Callable
 
 import numpy as np
@@ -77,6 +78,41 @@ def open_napari(
     viewer.text_overlay.position = "top_center"
     viewer.scale_bar.visible = True
     viewer.scale_bar.unit = "um"
+
+    _wire_close_to_release_memory(viewer)
+
+
+def _wire_close_to_release_memory(viewer) -> None:
+    """Drop layer references when the user closes the 3D viewer.
+
+    napari registers each Viewer in a global instance set and the Qt
+    main window keeps strong references to layer data via vispy's GPU
+    nodes; by default neither is released when the user X's the window,
+    so the multi-GB OME-TIFF stacks linger in RSS for the rest of the
+    gallery process. Patching the QMainWindow's ``closeEvent`` to clear
+    layers and run ``gc.collect`` releases the buffers immediately.
+    """
+    qt_window = viewer.window._qt_window
+    original_close_event = qt_window.closeEvent
+
+    def _close_and_release(event) -> None:
+        # Clearing ``viewer.layers`` empties napari's layer list but
+        # vispy keeps a C-level reference to each layer's source array
+        # via the volume / image visual it uploaded to GPU — so the
+        # multi-GB stacks stay live with zero Python referrers. Swapping
+        # in a 1×1×1 stub forces vispy to drop the original buffer; the
+        # subsequent ``layers.clear()`` then reclaims everything.
+        try:
+            for layer in list(viewer.layers):
+                if hasattr(layer, "data") and isinstance(layer.data, np.ndarray):
+                    layer.data = np.zeros((1, 1, 1), dtype=layer.data.dtype)
+            viewer.layers.clear()
+        except Exception:
+            pass
+        original_close_event(event)
+        gc.collect()
+
+    qt_window.closeEvent = _close_and_release
 
 
 def _add_bounding_box(viewer, scale, shape_zyx) -> None:
