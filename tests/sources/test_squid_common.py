@@ -164,3 +164,24 @@ def test_parse_mag_extracts_int():
 
 def test_parse_mag_none_when_no_prefix():
     assert common.parse_mag("A1_no_mag") is None
+
+
+# ── display_fov ───────────────────────────────────────────────────────────
+
+
+def test_display_fov_strips_zero_region():
+    """Single-region acquisitions (region=='0') show just the fov index."""
+    assert common.display_fov("0_0") == "0"
+    assert common.display_fov("0_3") == "3"
+
+
+def test_display_fov_keeps_nonzero_region():
+    """Multi-region squid acquisitions keep the full composite id."""
+    assert common.display_fov("1_0") == "1_0"
+    assert common.display_fov("A1_3") == "A1_3"
+
+
+def test_display_fov_passthrough_for_unstructured_id():
+    """Inputs that don't match the composite shape are returned as-is."""
+    assert common.display_fov("nonsense") == "nonsense"
+    assert common.display_fov("") == ""

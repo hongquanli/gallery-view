@@ -75,6 +75,25 @@ def channel_extras_from_yaml(
     return {}
 
 
+def display_fov(fov: str) -> str:
+    """Strip the synthesized ``"0_"`` region prefix from a composite FOV id
+    when it would just add noise.
+
+    ``acq.fovs`` always stores composite ``"<region>_<fov>"`` strings — for
+    legacy folders and single-region squid folders ``region == "0"``,
+    which is uninformative on screen. UI labels and exported filenames
+    use this helper so single-region acquisitions read as ``"0"`` /
+    ``"1"`` / … instead of ``"0_0"`` / ``"0_1"``, while multi-region
+    squid acquisitions keep the full composite (``"A1_3"``, ``"1_0"``).
+    """
+    region, _, fov_idx = fov.partition("_")
+    if not fov_idx:           # unstructured fov id — show as-is
+        return fov
+    if region == "0":
+        return fov_idx
+    return fov
+
+
 def display_name_for(folder_name: str) -> str:
     """A short human label for a squid acquisition folder.
 

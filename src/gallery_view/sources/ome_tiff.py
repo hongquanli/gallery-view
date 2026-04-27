@@ -42,9 +42,6 @@ class OmeTiffHandler:
             extra={"ome_path": ome_path},
         )
 
-    def list_fovs(self, acq: Acquisition) -> list[str]:
-        return ["0"]
-
     def read_shape(self, acq: Acquisition, fov: str) -> ShapeZYX | None:
         try:
             with TiffFile(acq.extra["ome_path"]) as tif:

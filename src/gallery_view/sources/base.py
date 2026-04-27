@@ -27,10 +27,6 @@ class FormatHandler(Protocol):
         folder is unparseable for any reason (channels missing, etc.)."""
         ...
 
-    def list_fovs(self, acq: Acquisition) -> list[str]:
-        """List of FOV ids available in the acquisition. v1: always ['0']."""
-        ...
-
     def read_shape(
         self, acq: Acquisition, fov: str
     ) -> ShapeZYX | None:

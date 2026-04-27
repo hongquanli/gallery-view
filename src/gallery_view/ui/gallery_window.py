@@ -23,7 +23,7 @@ from qtpy.QtWidgets import (
 from .. import scan
 from ..loader import Job, MipLoader
 from ..mips import mip_to_rgba
-from ..sources._squid_common import parse_mag, parse_timestamp
+from ..sources._squid_common import display_fov, parse_mag, parse_timestamp
 from ..types import Acquisition, AxisMip
 from .colors import CHANNEL_ORDER, rgb_for
 
@@ -561,7 +561,7 @@ class GalleryWindow(QMainWindow):
         h.addWidget(time_lbl)
 
         if self.expanded_fov_mode and len(acq.fovs) > 1:
-            fov_lbl = QLabel(f"FOV {key.fov}")
+            fov_lbl = QLabel(f"FOV {display_fov(key.fov)}")
             fov_lbl.setFixedWidth(50)
             fov_lbl.setStyleSheet("color: #888; font-size: 10px;")
             h.addWidget(fov_lbl)
@@ -627,7 +627,7 @@ class GalleryWindow(QMainWindow):
         if not self.expanded_fov_mode and len(acq.fovs) > 1:
             fov_combo = QComboBox()
             for fov in acq.fovs:
-                fov_combo.addItem(f"FOV {fov}", fov)
+                fov_combo.addItem(f"FOV {display_fov(fov)}", fov)
             fov_combo.setCurrentIndex(acq.fovs.index(acq.selected_fov))
             fov_combo.currentIndexChanged.connect(
                 lambda i, k=key, c=fov_combo: self._on_fov_changed(k, c.itemData(i))
