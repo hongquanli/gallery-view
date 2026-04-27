@@ -88,6 +88,7 @@ class GalleryWindow(QMainWindow):
     def _build_ui(self) -> None:
         from .sources_panel import SourcesPanel
 
+        self._build_menus()
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
@@ -190,6 +191,89 @@ class GalleryWindow(QMainWindow):
         row.addWidget(self.size_combo)
         row.addStretch()
         layout.addLayout(row)
+
+    def _build_menus(self) -> None:
+        from qtpy.QtGui import QAction
+        from qtpy.QtWidgets import QFileDialog, QMessageBox
+
+        menubar = self.menuBar()
+        menubar.setStyleSheet(
+            "QMenuBar { background-color: #2a2a2a; color: #ccc; }"
+            "QMenuBar::item:selected { background-color: #444; }"
+            "QMenu { background-color: #2a2a2a; color: #ccc; border: 1px solid #444; }"
+            "QMenu::item:selected { background-color: #2d5aa0; color: white; }"
+        )
+
+        file_menu = menubar.addMenu("File")
+        add_action = QAction("Add Folder…", self)
+        add_action.setShortcut("Ctrl+O")
+        add_action.triggered.connect(self._on_add_folder)
+        file_menu.addAction(add_action)
+        refresh_action = QAction("Refresh sources", self)
+        refresh_action.triggered.connect(self._on_refresh_sources)
+        file_menu.addAction(refresh_action)
+        file_menu.addSeparator()
+        quit_action = QAction("Quit", self)
+        quit_action.setShortcut("Ctrl+Q")
+        quit_action.triggered.connect(self.close)
+        file_menu.addAction(quit_action)
+
+        settings_menu = menubar.addMenu("Settings")
+
+        self.square_action = QAction("Square footprint for XZ/YZ", self)
+        self.square_action.setCheckable(True)
+        self.square_action.toggled.connect(self._set_square_footprint)
+        settings_menu.addAction(self.square_action)
+
+        self.expand_action = QAction("Expand all FOVs as separate rows", self)
+        self.expand_action.setCheckable(True)
+        self.expand_action.toggled.connect(self._set_expanded_fov_mode)
+        settings_menu.addAction(self.expand_action)
+
+        settings_menu.addSeparator()
+        clear_action = QAction("Clear MIP cache…", self)
+        clear_action.triggered.connect(self._on_clear_cache)
+        settings_menu.addAction(clear_action)
+
+    def _on_add_folder(self) -> None:
+        from qtpy.QtWidgets import QFileDialog
+        path = QFileDialog.getExistingDirectory(self, "Add folder")
+        if path:
+            self._add_source(path)
+
+    def _on_refresh_sources(self) -> None:
+        roots = [s.path for s in self.sources]
+        # Remove + re-add each root: keeps API simple, may re-enqueue cached jobs
+        # which the loader skips quickly via cache.load.
+        for path in roots:
+            self._remove_source(path)
+        for path in roots:
+            self._add_source(path)
+
+    def _on_clear_cache(self) -> None:
+        from qtpy.QtWidgets import QMessageBox
+        from .. import cache
+
+        reply = QMessageBox.question(
+            self, "Clear MIP cache",
+            f"Delete the MIP cache at {cache.CACHE_DIR}?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            cache.clear_all()
+            self.status.setText("MIP cache cleared.")
+
+    def _set_square_footprint(self, checked: bool) -> None:
+        self.square_footprint = checked
+        self._apply_label_sizes()
+        for (acq_id, fov, ch_idx, axis), ax_mip in self.mip_data.items():
+            if axis != self.view_axis:
+                continue
+            self._render_thumb(acq_id, fov, ch_idx, ax_mip)
+
+    def _set_expanded_fov_mode(self, checked: bool) -> None:
+        self.expanded_fov_mode = checked
+        self._rebuild_rows()
 
     @staticmethod
     def _toggle_style() -> str:
