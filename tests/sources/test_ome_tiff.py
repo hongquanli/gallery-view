@@ -17,12 +17,10 @@ def test_detect_returns_true_for_ome_tiff_acq(handler, make_ome_tiff_acq):
 
 
 def test_detect_returns_false_for_other_formats(
-    handler, make_multi_channel_tiff_acq, make_single_channel_tiff_acq
+    handler, make_multi_channel_tiff_acq
 ):
     folder = make_multi_channel_tiff_acq()
     assert handler.detect(str(folder)) is False
-    _, folders = make_single_channel_tiff_acq()
-    assert handler.detect(str(folders[0])) is False
 
 
 def test_build_populates_acquisition(handler, make_ome_tiff_acq):

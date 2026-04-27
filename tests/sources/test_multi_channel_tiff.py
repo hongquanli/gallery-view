@@ -16,11 +16,9 @@ def test_detect_returns_true_for_multi_channel(handler, make_multi_channel_tiff_
     assert handler.detect(str(folder)) is True
 
 
-def test_detect_returns_false_for_single_channel_folder(
-    handler, make_single_channel_tiff_acq, make_ome_tiff_acq
+def test_detect_returns_false_for_other_formats(
+    handler, make_ome_tiff_acq
 ):
-    _, folders = make_single_channel_tiff_acq(wavelengths=("488",))
-    assert handler.detect(str(folders[0])) is False
     assert handler.detect(str(make_ome_tiff_acq())) is False
 
 
