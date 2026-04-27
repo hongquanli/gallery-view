@@ -10,6 +10,7 @@ from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -64,12 +65,16 @@ class GalleryWindow(QMainWindow):
         self.setStyleSheet(
             "QMainWindow { background-color: #1a1a1a; color: white; }"
             "QLabel { color: white; }"
+            "QGroupBox { font-size: 13px; font-weight: bold; border: 1px solid #333;"
+            " border-radius: 6px; margin-top: 8px; padding: 6px 4px 4px 4px; color: #ddd; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
         )
 
         self.acquisitions: list[Acquisition | None] = []
         self.sources: list[Source] = []
         self.row_keys: list[RowKey] = []
         self.row_widgets: dict[tuple[int, str], RowWidgets] = {}
+        self.source_groups: list[QGroupBox] = []
         self.expanded_fov_mode: bool = False
         self.square_footprint: bool = False
         # (acq_id, fov, ch_idx, axis) -> AxisMip
@@ -124,10 +129,6 @@ class GalleryWindow(QMainWindow):
         )
         self.scroll_layout.insertWidget(0, self.empty_overlay)
 
-        self.status = QLabel("Drop folders to begin.")
-        self.status.setStyleSheet("color: #888; font-size: 11px; padding: 2px 4px;")
-        layout.addWidget(self.status)
-
     def _build_filter_row(self, layout: QVBoxLayout) -> None:
         row = QHBoxLayout()
         row.setSpacing(10)
@@ -148,6 +149,10 @@ class GalleryWindow(QMainWindow):
         row.addWidget(self.hide_thin_btn)
 
         row.addStretch()
+
+        self.status = QLabel("Drop folders to begin.")
+        self.status.setStyleSheet("color: #666; font-size: 11px; padding: 2px 4px;")
+        row.addWidget(self.status)
         layout.addLayout(row)
 
         self.mag_checkboxes: dict[int, QCheckBox] = {}
@@ -371,14 +376,15 @@ class GalleryWindow(QMainWindow):
         for mag in sorted(mags):
             cb = QCheckBox(f"{mag}x")
             cb.setChecked(True)
-            cb.setStyleSheet("QCheckBox { color: #ccc; font-size: 11px; }")
+            cb.setStyleSheet(
+                "QCheckBox { color: #ccc; font-size: 11px; spacing: 6px; padding-right: 10px; }"
+                "QCheckBox::indicator { width: 14px; height: 14px; }"
+            )
             cb.stateChanged.connect(self._refresh_visibility)
             self.mag_row_layout.addWidget(cb)
             self.mag_checkboxes[mag] = cb
 
     def _refresh_visibility(self) -> None:
-        from ..sources._squid_common import parse_mag
-
         active_mags = {m for m, cb in self.mag_checkboxes.items() if cb.isChecked()}
         hide_thin = self.hide_thin_btn.isChecked()
         for (acq_id, fov), rw in self.row_widgets.items():
@@ -391,36 +397,49 @@ class GalleryWindow(QMainWindow):
                 visible = acq.shape_zyx[0] >= THIN_Z_THRESHOLD
             rw.container.setVisible(visible)
 
+        # Hide a source group whose rows are all hidden — keeps the gallery
+        # from showing empty group boxes after filtering.
+        for grp_idx, src in enumerate(self.sources):
+            if grp_idx >= len(self.source_groups):
+                continue
+            any_visible = False
+            for acq_id in src.acq_ids:
+                acq = self.acquisitions[acq_id]
+                if acq is None:
+                    continue
+                fovs = acq.fovs if self.expanded_fov_mode else [acq.selected_fov]
+                for fov in fovs:
+                    rw = self.row_widgets.get((acq_id, fov))
+                    if rw and rw.container.isVisible():
+                        any_visible = True
+                        break
+                if any_visible:
+                    break
+            self.source_groups[grp_idx].setVisible(any_visible)
+
     # ── row rendering ──
 
     def _rebuild_rows(self) -> None:
-        # Clear existing row widgets
+        # Clear existing rows AND existing source groups
         for rw in self.row_widgets.values():
-            self.scroll_layout.removeWidget(rw.container)
             rw.container.deleteLater()
         self.row_widgets.clear()
         self.row_keys = []
-
-        # Build the row key list per the current expansion mode
-        for acq_id, acq in enumerate(self.acquisitions):
-            if acq is None:
-                continue
-            if self.expanded_fov_mode:
-                for fov in acq.fovs:
-                    self.row_keys.append(RowKey(acq_id, fov))
-            else:
-                self.row_keys.append(RowKey(acq_id, acq.selected_fov))
+        for grp in self.source_groups:
+            self.scroll_layout.removeWidget(grp)
+            grp.deleteLater()
+        self.source_groups = []
 
         # Compute the active wavelength column set (drop any column no row uses)
         active_wls: list[str] = self._active_wavelengths()
 
-        # Insert one row widget per RowKey, before the trailing stretch
-        insert_at = self.scroll_layout.count() - 1  # before stretch
-        for key in self.row_keys:
-            acq = self.acquisitions[key.acq_id]
-            row = self._make_row_widget(key, acq, active_wls)
-            self.row_widgets[(key.acq_id, key.fov)] = row
-            self.scroll_layout.insertWidget(insert_at, row.container)
+        # One QGroupBox per source root, in drop order. Acquisitions in a
+        # group are listed in the order they were ingested.
+        insert_at = self.scroll_layout.count() - 1  # before trailing stretch
+        for src_idx, src in enumerate(self.sources):
+            group = self._make_source_group(src, src_idx, active_wls)
+            self.source_groups.append(group)
+            self.scroll_layout.insertWidget(insert_at, group)
             insert_at += 1
 
         # Re-render any thumbs we already have data for
@@ -431,6 +450,39 @@ class GalleryWindow(QMainWindow):
 
         self._refresh_visibility()
         self._apply_label_sizes()
+
+    def _make_source_group(self, src: "Source", src_idx: int, active_wls: list[str]) -> QGroupBox:
+        bg = "#2a2a2a" if src_idx % 2 == 0 else "#1a1a1a"
+        title = os.path.basename(os.path.normpath(src.path)) or src.path
+        group = QGroupBox(f"{title}  ({len(src.acq_ids)})")
+        group.setToolTip(src.path)
+        group.setStyleSheet(
+            f"QGroupBox {{ font-size: 13px; font-weight: bold; border: 1px solid #333;"
+            f" border-radius: 6px; margin-top: 8px; padding: 6px 4px 4px 4px;"
+            f" color: #ddd; background-color: {bg}; }}"
+            f"QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px;"
+            f" background-color: {bg}; }}"
+            f"QGroupBox QWidget {{ background-color: transparent; }}"
+        )
+        group_layout = QVBoxLayout(group)
+        group_layout.setContentsMargins(4, 4, 4, 4)
+        group_layout.setSpacing(2)
+
+        for acq_id in src.acq_ids:
+            acq = self.acquisitions[acq_id]
+            if acq is None:
+                continue
+            fovs_for_this_acq = (
+                acq.fovs if self.expanded_fov_mode else [acq.selected_fov]
+            )
+            for fov in fovs_for_this_acq:
+                key = RowKey(acq_id, fov)
+                self.row_keys.append(key)
+                row = self._make_row_widget(key, acq, active_wls)
+                self.row_widgets[(acq_id, fov)] = row
+                group_layout.addWidget(row.container)
+
+        return group
 
     def _active_wavelengths(self) -> list[str]:
         seen: set[str] = set()
@@ -471,10 +523,13 @@ class GalleryWindow(QMainWindow):
             fov_lbl.setStyleSheet("color: #888; font-size: 10px;")
             h.addWidget(fov_lbl)
 
+        # Compact name column — analogous to the explorer's "device" column.
+        # Multi-line wrap so the layout stays tight; full path in tooltip.
         name_lbl = QLabel(acq.display_name)
-        name_lbl.setFixedWidth(140)
+        name_lbl.setFixedWidth(80)
+        name_lbl.setWordWrap(True)
         name_lbl.setToolTip(acq.path)
-        name_lbl.setStyleSheet("color: #ccc; font-size: 10px;")
+        name_lbl.setStyleSheet("color: #ccc; font-size: 9px; font-weight: bold;")
         h.addWidget(name_lbl)
 
         # One column per active wavelength
@@ -524,25 +579,33 @@ class GalleryWindow(QMainWindow):
             )
             h.addWidget(fov_combo)
 
+        # Action buttons — vertical stack to match explorer layout.
+        btn_col = QVBoxLayout()
+        btn_col.setSpacing(2)
+
         btn_3d = QPushButton("Open 3D View")
-        btn_3d.setFixedSize(110, 26)
+        btn_3d.setFixedSize(120, 30)
+        btn_3d.setCursor(Qt.PointingHandCursor)
         btn_3d.setStyleSheet(
             "QPushButton { background-color: #2d5aa0; color: white; border-radius: 4px;"
             " font-size: 11px; font-weight: bold; }"
             "QPushButton:hover { background-color: #3a6fc0; }"
         )
         btn_3d.clicked.connect(lambda _, k=key: self._open_napari(k))
-        h.addWidget(btn_3d)
+        btn_col.addWidget(btn_3d)
 
         btn_lut = QPushButton("Adjust Contrast")
-        btn_lut.setFixedSize(110, 26)
+        btn_lut.setFixedSize(120, 30)
+        btn_lut.setCursor(Qt.PointingHandCursor)
         btn_lut.setStyleSheet(
             "QPushButton { background-color: #555; color: white; border-radius: 4px;"
-            " font-size: 11px; }"
+            " font-size: 11px; font-weight: bold; }"
             "QPushButton:hover { background-color: #777; }"
         )
         btn_lut.clicked.connect(lambda _, k=key: self._adjust_lut(k))
-        h.addWidget(btn_lut)
+        btn_col.addWidget(btn_lut)
+
+        h.addLayout(btn_col)
 
         return RowWidgets(
             container=container,
