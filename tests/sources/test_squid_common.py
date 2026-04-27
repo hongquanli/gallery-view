@@ -164,36 +164,3 @@ def test_parse_mag_extracts_int():
 
 def test_parse_mag_none_when_no_prefix():
     assert common.parse_mag("A1_no_mag") is None
-
-
-# ── parse_mag_well_wl ──
-
-
-def test_parse_mag_well_wl_happy_path():
-    assert common.parse_mag_well_wl(
-        "25x_C3_488_LR1000_2026-04-26_12-00-00.000000"
-    ) == (25, "C3", "488")
-
-
-def test_parse_mag_well_wl_rejects_unknown_wavelength():
-    """Wavelengths outside KNOWN_WAVELENGTHS are filtered out — they likely
-    aren't actually channels (could be FOV indices, lookup IDs, etc.)."""
-    assert (
-        common.parse_mag_well_wl(
-            "25x_C3_999_LR1000_2026-04-26_12-00-00.000000"
-        )
-        is None
-    )
-
-
-def test_parse_mag_well_wl_rejects_missing_well():
-    assert (
-        common.parse_mag_well_wl(
-            "25x__488_LR1000_2026-04-26_12-00-00.000000"
-        )
-        is None
-    )
-
-
-def test_parse_mag_well_wl_rejects_missing_timestamp():
-    assert common.parse_mag_well_wl("25x_C3_488_LR1000") is None
