@@ -1,0 +1,141 @@
+"""OME-TIFF handler for squid output (axes ZCYX, TCYX, or CYX)."""
+
+import re
+from typing import Iterator
+
+import numpy as np
+from tifffile import TiffFile
+
+from ..types import Acquisition, Channel, ShapeZYX
+from . import _squid_common as common
+
+OME_PATH = ("ome_tiff", "current_0.ome.tiff")
+
+
+class OmeTiffHandler:
+    name = "ome_tiff"
+
+    def detect(self, folder: str) -> bool:
+        import os
+
+        return os.path.exists(os.path.join(folder, *OME_PATH))
+
+    def build(self, folder: str, params: dict) -> Acquisition | None:
+        import os
+
+        ome_path = os.path.join(folder, *OME_PATH)
+        channels = common.parse_acquisition_channels_yaml(folder)
+        if not channels:
+            # Fall back to reading channel count from the OME header
+            channels = self._channels_from_ome_header(ome_path)
+        if not channels:
+            return None
+        # Refine wavelengths from channel names if the shared parser left them as "unknown"
+        channels = self._refine_wavelengths(channels)
+        folder_name = os.path.basename(folder)
+        return Acquisition(
+            handler=self,
+            path=folder,
+            folder_name=folder_name,
+            display_name=common.display_name_for(folder_name),
+            params=params,
+            channels=channels,
+            fovs=["0"],
+            extra={"ome_path": ome_path},
+        )
+
+    def list_fovs(self, acq: Acquisition) -> list[str]:
+        return ["0"]
+
+    def read_shape(self, acq: Acquisition, fov: str) -> ShapeZYX | None:
+        try:
+            with TiffFile(acq.extra["ome_path"]) as tif:
+                s = tif.series[0]
+                axes, shape = s.axes, s.shape
+                if axes == "CYX":
+                    return (1, shape[1], shape[2])
+                if axes in ("ZCYX", "TCYX"):
+                    return (shape[0], shape[2], shape[3])
+        except (OSError, ValueError, IndexError):
+            return None
+        return None
+
+    def cache_key(
+        self, acq: Acquisition, fov: str, channel: Channel
+    ) -> tuple[str, str]:
+        return acq.extra["ome_path"], f"fov{fov}/wl_{channel.wavelength}"
+
+    def iter_z_slices(
+        self, acq: Acquisition, fov: str, channel: Channel
+    ) -> Iterator[np.ndarray]:
+        ome_path = acq.extra["ome_path"]
+        ch_idx = self._channel_index(acq, channel)
+        with TiffFile(ome_path) as tif:
+            s = tif.series[0]
+            axes, shape = s.axes, s.shape
+            if axes == "CYX":
+                yield tif.pages[ch_idx].asarray().astype(np.float32)
+                return
+            if axes in ("ZCYX", "TCYX"):
+                nz, nc = shape[0], shape[1]
+                for z in range(nz):
+                    yield tif.pages[z * nc + ch_idx].asarray().astype(np.float32)
+                return
+            raise ValueError(f"Unsupported OME-TIFF axes: {axes}")
+
+    def load_full_stack(
+        self, acq: Acquisition, fov: str, channel: Channel
+    ) -> np.ndarray:
+        ch_idx = self._channel_index(acq, channel)
+        with TiffFile(acq.extra["ome_path"]) as tif:
+            data = tif.series[0].asarray()
+            axes = tif.series[0].axes
+        if axes == "CYX":
+            return data[ch_idx][np.newaxis, :, :]
+        if axes in ("ZCYX", "TCYX"):
+            return data[:, ch_idx, :, :]
+        raise ValueError(f"Unsupported OME-TIFF axes: {axes}")
+
+    def channel_yaml_extras(
+        self, acq: Acquisition, channel: Channel
+    ) -> dict:
+        return common.channel_extras_from_yaml(acq.path, channel)
+
+    # ── helpers ──
+
+    @staticmethod
+    def _refine_wavelengths(channels: list[Channel]) -> list[Channel]:
+        """If channels have 'unknown' wavelength, try to extract from the name."""
+        refined = []
+        for ch in channels:
+            if ch.wavelength != "unknown":
+                refined.append(ch)
+            else:
+                # Try to extract wavelength from channel name
+                # Matches patterns like "488_nm", "488 nm", "488nm", etc.
+                wl_match = re.search(r"(\d+)[_\s]*nm", ch.name)
+                wl = wl_match.group(1) if wl_match else "unknown"
+                refined.append(Channel(name=ch.name, wavelength=wl))
+        return refined
+
+    @staticmethod
+    def _channel_index(acq: Acquisition, channel: Channel) -> int:
+        for i, c in enumerate(acq.channels):
+            if c.name == channel.name:
+                return i
+        raise ValueError(f"Channel {channel.name!r} not found in {acq.path}")
+
+    @staticmethod
+    def _channels_from_ome_header(ome_path: str) -> list[Channel]:
+        try:
+            with TiffFile(ome_path) as tif:
+                s = tif.series[0]
+                axes, shape = s.axes, s.shape
+                nc = (
+                    shape[1]
+                    if axes in ("ZCYX", "TCYX")
+                    else (shape[0] if axes == "CYX" else 0)
+                )
+        except (OSError, ValueError, IndexError):
+            return []
+        return [Channel(name=f"channel_{i}", wavelength="unknown") for i in range(nc)]
