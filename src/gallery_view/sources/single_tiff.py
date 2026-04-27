@@ -15,6 +15,39 @@ from tifffile import TiffFile, imread
 from ..types import Acquisition, Channel, ShapeZYX
 from . import _squid_common as common
 
+# Matches cephla-lab/ndviewer_light's FPATTERN. <region> is any non-underscore
+# string — squid stuffs the well there for plate acquisitions and a numeric
+# region id for non-plate runs, so a single capture handles both cases.
+_SQUID_RE = re.compile(
+    r"^(?P<region>[^_]+)_(?P<fov>\d+)_(?P<z>\d+)_(?P<channel>.+)\.tiff?$",
+    re.IGNORECASE,
+)
+_LEGACY_RE = re.compile(
+    r"^current_(?P<fov>\d+)_(?P<z>\d+)_(?P<channel>.+)\.tiff?$"
+)
+
+
+def parse_squid_filename(name: str) -> dict | None:
+    """Parse a squid per-image TIFF filename: ``<region>_<fov>_<z>_<channel>.tiff``.
+
+    ``region`` is any non-underscore string (numeric id, well like ``A1``,
+    etc.). NOTE: this also matches legacy ``current_<fov>_<z>_<ch>.tiff``
+    filenames (where ``current`` lands in the region slot). Detection code
+    must try ``parse_legacy_filename`` first.
+    """
+    m = _SQUID_RE.match(name)
+    if not m:
+        return None
+    return m.groupdict()
+
+
+def parse_legacy_filename(name: str) -> dict | None:
+    """Parse the older ``current_<fov>_<z>_<channel>.tiff`` filename."""
+    m = _LEGACY_RE.match(name)
+    if not m:
+        return None
+    return m.groupdict()
+
 
 class SingleTiffHandler:
     name = "single_tiff"

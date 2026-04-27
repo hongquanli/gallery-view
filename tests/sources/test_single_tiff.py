@@ -3,7 +3,11 @@
 import numpy as np
 import pytest
 
-from gallery_view.sources.single_tiff import SingleTiffHandler
+from gallery_view.sources.single_tiff import (
+    SingleTiffHandler,
+    parse_legacy_filename,
+    parse_squid_filename,
+)
 
 
 @pytest.fixture
@@ -66,3 +70,41 @@ def test_load_full_stack_shape(handler, make_single_tiff_acq):
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
     stack = handler.load_full_stack(acq, "0", acq.channels[0])
     assert stack.shape == (3, 4, 5)
+
+
+# ── filename parsers ────────────────────────────────────────────────────────
+
+
+def test_parse_squid_filename_numeric_region():
+    p = parse_squid_filename("0_1_2_Fluorescence_488_nm_Ex.tiff")
+    assert p == {"region": "0", "fov": "1", "z": "2",
+                 "channel": "Fluorescence_488_nm_Ex"}
+
+
+def test_parse_squid_filename_well_as_region():
+    """Squid puts the well in the region slot when wells are used."""
+    p = parse_squid_filename("A1_0_2_Fluorescence_488_nm_Ex.tiff")
+    assert p == {"region": "A1", "fov": "0", "z": "2",
+                 "channel": "Fluorescence_488_nm_Ex"}
+
+
+def test_parse_squid_filename_rejects_garbage():
+    assert parse_squid_filename("not_a_match.tiff") is None
+    assert parse_squid_filename("only_two_components.tiff") is None
+
+
+def test_parse_legacy_filename_basic():
+    p = parse_legacy_filename("current_3_5_Fluorescence_488_nm_Ex.tiff")
+    assert p == {"fov": "3", "z": "5", "channel": "Fluorescence_488_nm_Ex"}
+
+
+def test_parse_legacy_filename_rejects_squid():
+    assert parse_legacy_filename("0_1_2_Fluorescence_488_nm_Ex.tiff") is None
+
+
+def test_squid_regex_also_matches_legacy_filenames():
+    """Important: squid regex's [^_]+ region accepts 'current' too. Detection
+    code must try legacy first, then squid — never the other way around."""
+    p = parse_squid_filename("current_0_0_Fluorescence_488_nm_Ex.tiff")
+    assert p is not None
+    assert p["region"] == "current"  # documents the overlap
