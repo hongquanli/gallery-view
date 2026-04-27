@@ -1,10 +1,10 @@
-# Individual-TIFF Handler Implementation Plan
+# Single-TIFF Handler Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Drop `SingleChannelTiffHandler`, rename `MultiChannelTiffHandler` → `IndividualTiffHandler`, and teach the renamed handler squid's current per-image TIFF layout (`<acq>/<t>/<region>_<fov>_<z>_<channel>.tiff`, with optional `<well>_` prefix), while keeping the legacy `<acq>/0/current_<fov>_<z>_<channel>.tiff` layout working.
+**Goal:** Drop `SingleChannelTiffHandler`, rename `MultiChannelTiffHandler` → `SingleTiffHandler`, and teach the renamed handler squid's current per-image TIFF layout (`<acq>/<t>/<region>_<fov>_<z>_<channel>.tiff` — `<region>` is any non-underscore string), while keeping the legacy `<acq>/0/current_<fov>_<z>_<channel>.tiff` layout working. Format name (`single_tiff`) and filename regex match `cephla-lab/ndviewer_light` for ecosystem consistency.
 
-**Architecture:** Two regexes (squid + legacy) committed at detect time and recorded on `acq.extra["layout"]`. `Acquisition` gains `timepoints` and `selected_timepoint`; `FormatHandler` protocol grows a `timepoint: str = "0"` kwarg threaded through to `iter_z_slices` / `load_full_stack` / `iter_full_channel_stacks` / `cache_key`. Composite `<region>_<fov>` strings reuse the existing `acq.fovs` axis. Gallery row UI gains a Time combo (hidden when `len(timepoints) == 1`) wired identically to the FOV combo. Cache keys gain a `t<t>` segment; `CACHE_VERSION` bumps to 4 to evict pre-existing entries.
+**Architecture:** Two regexes (legacy then squid — squid's `[^_]+` region group also matches `current`, so legacy must be tried first) committed at detect time and recorded on `acq.extra["layout"]`. `Acquisition` gains `timepoints` and `selected_timepoint`; `FormatHandler` protocol grows a `timepoint: str = "0"` kwarg threaded through to `iter_z_slices` / `load_full_stack` / `iter_full_channel_stacks` / `cache_key`. Composite `<region>_<fov>` strings reuse the existing `acq.fovs` axis. Gallery row UI gains a Time combo (hidden when `len(timepoints) == 1`) wired identically to the FOV combo. Cache keys gain a `t<t>` segment; `CACHE_VERSION` bumps to 4 to evict pre-existing entries.
 
 **Tech Stack:** Python 3.11+, PyQt6 / qtpy, tifffile, numpy, pytest. Spec: `docs/superpowers/specs/2026-04-27-individual-tiff-handler-design.md`.
 
@@ -15,7 +15,7 @@
 | Path                                              | Action  | Responsibility                                            |
 |---------------------------------------------------|---------|-----------------------------------------------------------|
 | `src/gallery_view/sources/single_channel_tiff.py` | delete  | gone; AION format dropped                                 |
-| `src/gallery_view/sources/multi_channel_tiff.py`  | rename → `individual_tiff.py` | renamed handler; rewrites parse/discovery for squid+legacy |
+| `src/gallery_view/sources/multi_channel_tiff.py`  | rename → `single_tiff.py` | renamed handler; rewrites parse/discovery for squid+legacy |
 | `src/gallery_view/sources/__init__.py`            | modify  | drop SingleChannel import, rename Multi→Individual         |
 | `src/gallery_view/sources/base.py`                | modify  | add `timepoint="0"` kwarg to protocol methods             |
 | `src/gallery_view/sources/ome_tiff.py`            | modify  | accept-and-ignore `timepoint` kwarg                       |
@@ -24,9 +24,9 @@
 | `src/gallery_view/cache.py`                       | modify  | `CACHE_VERSION = 4`                                       |
 | `src/gallery_view/ui/gallery_window.py`           | modify  | Time combo, RowKey & mip_data shape                       |
 | `src/gallery_view/ui/lut_dialog.py`               | modify  | pass timepoint to `cache_key`                             |
-| `tests/conftest.py`                               | modify  | drop single-channel fixture; rename multi→individual; add `make_squid_individual_tiff_acq` |
+| `tests/conftest.py`                               | modify  | drop single-channel fixture; rename multi→individual; add `make_squid_single_tiff_acq` |
 | `tests/sources/test_single_channel_tiff.py`       | delete  | gone                                                       |
-| `tests/sources/test_multi_channel_tiff.py`        | rename → `test_individual_tiff.py` | rename; add squid-layout cases                |
+| `tests/sources/test_multi_channel_tiff.py`        | rename → `test_single_tiff.py` | rename; add squid-layout cases                |
 | `tests/sources/test_registry.py`                  | modify  | drop single-channel test, rename multi→individual         |
 | `tests/sources/test_ome_tiff.py`                  | modify  | accept-and-ignore timepoint test                          |
 | `tests/test_scan.py`                              | modify  | drop AION case, add squid case                            |
@@ -219,11 +219,11 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task 2: Rename MultiChannelTiffHandler → IndividualTiffHandler
+## Task 2: Rename MultiChannelTiffHandler → SingleTiffHandler
 
 **Files:**
-- Rename: `src/gallery_view/sources/multi_channel_tiff.py` → `individual_tiff.py`
-- Rename: `tests/sources/test_multi_channel_tiff.py` → `test_individual_tiff.py`
+- Rename: `src/gallery_view/sources/multi_channel_tiff.py` → `single_tiff.py`
+- Rename: `tests/sources/test_multi_channel_tiff.py` → `test_single_tiff.py`
 - Modify: `src/gallery_view/sources/__init__.py`
 - Modify: `tests/conftest.py` (rename fixture)
 - Modify: `tests/sources/test_registry.py`
@@ -233,20 +233,20 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 - [ ] **Step 1: `git mv` the source file**
 
 ```bash
-git mv src/gallery_view/sources/multi_channel_tiff.py src/gallery_view/sources/individual_tiff.py
-git mv tests/sources/test_multi_channel_tiff.py tests/sources/test_individual_tiff.py
+git mv src/gallery_view/sources/multi_channel_tiff.py src/gallery_view/sources/single_tiff.py
+git mv tests/sources/test_multi_channel_tiff.py tests/sources/test_single_tiff.py
 ```
 
 - [ ] **Step 2: Rename the class and `name` attribute**
 
-In `src/gallery_view/sources/individual_tiff.py`:
+In `src/gallery_view/sources/single_tiff.py`:
 
 ```python
-class IndividualTiffHandler:
-    name = "individual_tiff"
+class SingleTiffHandler:
+    name = "single_tiff"
 ```
 
-(Update the module docstring too — replace "multi-channel TIFF" with "individual TIFF" wording.)
+(Update the module docstring too — replace "multi-channel TIFF" with "single TIFF" wording.)
 
 - [ ] **Step 3: Update the registry import**
 
@@ -254,12 +254,12 @@ In `src/gallery_view/sources/__init__.py`:
 
 ```python
 from .base import FormatHandler
-from .individual_tiff import IndividualTiffHandler
+from .single_tiff import SingleTiffHandler
 from .ome_tiff import OmeTiffHandler
 
 HANDLERS: list[FormatHandler] = [
     OmeTiffHandler(),
-    IndividualTiffHandler(),
+    SingleTiffHandler(),
 ]
 ```
 
@@ -268,10 +268,10 @@ HANDLERS: list[FormatHandler] = [
 In `tests/conftest.py`:
 
 ```bash
-sed -i.bak 's/make_multi_channel_tiff_acq/make_individual_tiff_acq/g' tests/conftest.py && rm tests/conftest.py.bak
+sed -i.bak 's/make_multi_channel_tiff_acq/make_single_tiff_acq/g' tests/conftest.py && rm tests/conftest.py.bak
 ```
 
-(Verify the substitution: `grep "make_multi_channel\|make_individual" tests/conftest.py` should show only `make_individual_tiff_acq`.)
+(Verify the substitution: `grep "make_multi_channel\|make_individual" tests/conftest.py` should show only `make_single_tiff_acq`.)
 
 - [ ] **Step 5: Update test files using the fixture**
 
@@ -280,15 +280,15 @@ grep -rln "make_multi_channel_tiff_acq\|MultiChannelTiffHandler\|multi_channel_t
 ```
 
 For each match, replace:
-- `make_multi_channel_tiff_acq` → `make_individual_tiff_acq`
-- `MultiChannelTiffHandler` → `IndividualTiffHandler`
-- `"multi_channel_tiff"` (handler name string) → `"individual_tiff"`
+- `make_multi_channel_tiff_acq` → `make_single_tiff_acq`
+- `MultiChannelTiffHandler` → `SingleTiffHandler`
+- `"multi_channel_tiff"` (handler name string) → `"single_tiff"`
 
-`test_individual_tiff.py` will have the most replacements. Update `tests/sources/test_registry.py`'s test function name to `test_detect_returns_individual_handler` and assert `h.name == "individual_tiff"`.
+`test_single_tiff.py` will have the most replacements. Update `tests/sources/test_registry.py`'s test function name to `test_detect_returns_individual_handler` and assert `h.name == "single_tiff"`.
 
 - [ ] **Step 6: Update README format-table label**
 
-Change `multi_channel_tiff` → `individual_tiff` in the *Supported formats* table. Don't change descriptions yet.
+Change `multi_channel_tiff` → `single_tiff` in the *Supported formats* table. Don't change descriptions yet.
 
 - [ ] **Step 7: Run tests**
 
@@ -302,7 +302,7 @@ Expected: all pass (mechanical rename, no behavior change).
 
 ```bash
 git add -A
-git commit -m "Rename MultiChannelTiffHandler → IndividualTiffHandler
+git commit -m "Rename MultiChannelTiffHandler → SingleTiffHandler
 
 The 'multi-channel' label was misleading: the format is one TIFF per
 (z, channel), not multiple channels per file. Mechanical rename only —
@@ -320,7 +320,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 - Modify: `src/gallery_view/types.py`
 - Modify: `src/gallery_view/sources/base.py`
 - Modify: `src/gallery_view/sources/ome_tiff.py`
-- Modify: `src/gallery_view/sources/individual_tiff.py`
+- Modify: `src/gallery_view/sources/single_tiff.py`
 - Modify: `src/gallery_view/loader.py`
 - Modify: `src/gallery_view/ui/lut_dialog.py`
 - Modify: `tests/sources/test_ome_tiff.py`
@@ -420,9 +420,9 @@ def iter_z_slices(
 
 (Apply the same kwarg addition to `load_full_stack`, `iter_full_channel_stacks`, and `cache_key`.)
 
-- [ ] **Step 6: Update IndividualTiffHandler to accept the kwarg**
+- [ ] **Step 6: Update SingleTiffHandler to accept the kwarg**
 
-In `src/gallery_view/sources/individual_tiff.py`, add `timepoint: str = "0"` to the same four methods. Body unchanged for now — the timepoint will be wired into the glob in Task 9.
+In `src/gallery_view/sources/single_tiff.py`, add `timepoint: str = "0"` to the same four methods. Body unchanged for now — the timepoint will be wired into the glob in Task 9.
 
 - [ ] **Step 7: Add `timepoint` to `Job` and pass it through**
 
@@ -486,7 +486,7 @@ git commit -m "Add timepoint plumbing to data model, protocol, and Job
 Adds Acquisition.timepoints (default ['0']) and selected_timepoint,
 threads a timepoint='0' kwarg through FormatHandler.iter_z_slices /
 load_full_stack / iter_full_channel_stacks / cache_key, and propagates
-it via Job and the LUT dialog. OME-TIFF and the renamed Individual TIFF
+it via Job and the LUT dialog. OME-TIFF and the renamed single TIFF
 handler accept the kwarg; OME-TIFF ignores it (no <t>/ subdir).
 Backward-compatible defaults — no behavior change yet.
 
@@ -500,7 +500,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `src/gallery_view/cache.py`
 - Modify: `src/gallery_view/sources/ome_tiff.py` (cache_key shape)
-- Modify: `src/gallery_view/sources/individual_tiff.py` (cache_key shape)
+- Modify: `src/gallery_view/sources/single_tiff.py` (cache_key shape)
 - Modify: `tests/test_cache.py`
 - Modify: `tests/test_handler_cache_integration.py`
 
@@ -516,11 +516,11 @@ def test_cache_key_includes_timepoint(handler, make_ome_tiff_acq):
     assert "/t3/" in ch_id
 ```
 
-Append to `tests/sources/test_individual_tiff.py`:
+Append to `tests/sources/test_single_tiff.py`:
 
 ```python
-def test_cache_key_includes_timepoint(handler, make_individual_tiff_acq):
-    folder = make_individual_tiff_acq(wavelengths=("488",))
+def test_cache_key_includes_timepoint(handler, make_single_tiff_acq):
+    folder = make_single_tiff_acq(wavelengths=("488",))
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
     _, ch_id = handler.cache_key(acq, "0", acq.channels[0], timepoint="2")
     assert "/t2/" in ch_id
@@ -529,7 +529,7 @@ def test_cache_key_includes_timepoint(handler, make_individual_tiff_acq):
 - [ ] **Step 2: Run them to verify they fail**
 
 ```bash
-.venv/bin/python -m pytest tests/sources/test_ome_tiff.py::test_cache_key_includes_timepoint tests/sources/test_individual_tiff.py::test_cache_key_includes_timepoint -v
+.venv/bin/python -m pytest tests/sources/test_ome_tiff.py::test_cache_key_includes_timepoint tests/sources/test_single_tiff.py::test_cache_key_includes_timepoint -v
 ```
 
 Expected: FAIL on the assert (current keys lack `/t<t>/`).
@@ -544,7 +544,7 @@ def cache_key(
     return acq.extra["ome_path"], f"fov{fov}/t{timepoint}/wl_{channel.wavelength}"
 ```
 
-- [ ] **Step 4: Update `cache_key` in IndividualTiffHandler**
+- [ ] **Step 4: Update `cache_key` in SingleTiffHandler**
 
 ```python
 def cache_key(
@@ -559,7 +559,7 @@ def cache_key(
 In `src/gallery_view/cache.py:18`:
 
 ```python
-CACHE_VERSION = 4  # v4: cache key includes /t<t>/ for multi-timepoint individual_tiff
+CACHE_VERSION = 4  # v4: cache key includes /t<t>/ for multi-timepoint single_tiff
 ```
 
 - [ ] **Step 6: Update `tests/test_cache.py` if it asserts a specific version**
@@ -596,7 +596,7 @@ Expected: all pass.
 git add -A
 git commit -m "Add /t<t>/ segment to cache keys; bump CACHE_VERSION → 4
 
-Cache keys now include the timepoint so multi-timepoint individual_tiff
+Cache keys now include the timepoint so multi-timepoint single_tiff
 acquisitions don't collide. CACHE_VERSION bumps to 4 so any pre-existing
 v3 entries are evicted on first read and recomputed.
 
@@ -608,38 +608,36 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ## Task 5: Add squid filename regex (parsing only, no detection wiring yet)
 
 **Files:**
-- Modify: `src/gallery_view/sources/individual_tiff.py`
-- Modify: `tests/sources/test_individual_tiff.py`
+- Modify: `src/gallery_view/sources/single_tiff.py`
+- Modify: `tests/sources/test_single_tiff.py`
 
 - [ ] **Step 1: Write failing tests**
 
-Append to `tests/sources/test_individual_tiff.py`:
+Append to `tests/sources/test_single_tiff.py`:
 
 ```python
-from gallery_view.sources.individual_tiff import (
+from gallery_view.sources.single_tiff import (
     parse_squid_filename,
     parse_legacy_filename,
 )
 
 
-def test_parse_squid_filename_basic():
+def test_parse_squid_filename_numeric_region():
     p = parse_squid_filename("0_1_2_Fluorescence_488_nm_Ex.tiff")
-    assert p == {"well": None, "region": "0", "fov": "1", "z": "2",
+    assert p == {"region": "0", "fov": "1", "z": "2",
                  "channel": "Fluorescence_488_nm_Ex"}
 
 
-def test_parse_squid_filename_with_well_prefix():
-    p = parse_squid_filename("A1_0_1_2_Fluorescence_488_nm_Ex.tiff")
-    assert p == {"well": "A1", "region": "0", "fov": "1", "z": "2",
+def test_parse_squid_filename_well_as_region():
+    """Squid puts the well in the region slot when wells are used."""
+    p = parse_squid_filename("A1_0_2_Fluorescence_488_nm_Ex.tiff")
+    assert p == {"region": "A1", "fov": "0", "z": "2",
                  "channel": "Fluorescence_488_nm_Ex"}
-
-
-def test_parse_squid_filename_rejects_legacy():
-    assert parse_squid_filename("current_0_0_Fluorescence_488_nm_Ex.tiff") is None
 
 
 def test_parse_squid_filename_rejects_garbage():
     assert parse_squid_filename("not_a_match.tiff") is None
+    assert parse_squid_filename("only_two_components.tiff") is None
 
 
 def test_parse_legacy_filename_basic():
@@ -649,27 +647,37 @@ def test_parse_legacy_filename_basic():
 
 def test_parse_legacy_filename_rejects_squid():
     assert parse_legacy_filename("0_1_2_Fluorescence_488_nm_Ex.tiff") is None
+
+
+def test_squid_regex_also_matches_legacy_filenames():
+    """Important: squid regex's [^_]+ region accepts 'current' too. Detection
+    code must try legacy first, then squid — never the other way around."""
+    p = parse_squid_filename("current_0_0_Fluorescence_488_nm_Ex.tiff")
+    assert p is not None
+    assert p["region"] == "current"  # documents the overlap
 ```
 
 - [ ] **Step 2: Run them to verify failure**
 
 ```bash
-.venv/bin/python -m pytest tests/sources/test_individual_tiff.py -v -k "parse_"
+.venv/bin/python -m pytest tests/sources/test_single_tiff.py -v -k "parse_"
 ```
 
 Expected: ImportError (the parsers don't exist yet).
 
 - [ ] **Step 3: Implement the parsers**
 
-In `src/gallery_view/sources/individual_tiff.py`, add at module top (after imports, before the class):
+In `src/gallery_view/sources/single_tiff.py`, add at module top (after imports, before the class). The regex matches `cephla-lab/ndviewer_light`'s `FPATTERN` exactly:
 
 ```python
 import re
 
+# Matches cephla-lab/ndviewer_light's FPATTERN. <region> is any non-underscore
+# string — squid stuffs the well there for plate acquisitions and a numeric
+# region id for non-plate runs, so a single capture handles both cases.
 _SQUID_RE = re.compile(
-    r"^(?:(?P<well>[A-Z]+\d+)_)?"
-    r"(?P<region>\d+)_(?P<fov>\d+)_(?P<z>\d+)_"
-    r"(?P<channel>.+)\.tiff?$"
+    r"^(?P<region>[^_]+)_(?P<fov>\d+)_(?P<z>\d+)_(?P<channel>.+)\.tiff?$",
+    re.IGNORECASE,
 )
 _LEGACY_RE = re.compile(
     r"^current_(?P<fov>\d+)_(?P<z>\d+)_(?P<channel>.+)\.tiff?$"
@@ -677,24 +685,17 @@ _LEGACY_RE = re.compile(
 
 
 def parse_squid_filename(name: str) -> dict | None:
-    """Parse a squid per-image TIFF filename into its components.
+    """Parse a squid per-image TIFF filename: ``<region>_<fov>_<z>_<channel>.tiff``.
 
-    Format: ``[<well>_]<region>_<fov>_<z>_<channel>.tiff`` where ``<well>``
-    is the optional letter-digit prefix (e.g. ``A1``) and the other
-    components are decimal integers. Returns None when the name doesn't
-    match (lets callers fall back to the legacy parser).
+    ``region`` is any non-underscore string (numeric id, well like ``A1``,
+    etc.). NOTE: this also matches legacy ``current_<fov>_<z>_<ch>.tiff``
+    filenames (where ``current`` lands in the region slot). Detection code
+    must try ``parse_legacy_filename`` first.
     """
     m = _SQUID_RE.match(name)
     if not m:
         return None
-    g = m.groupdict()
-    return {
-        "well": g["well"],
-        "region": g["region"],
-        "fov": g["fov"],
-        "z": g["z"],
-        "channel": g["channel"],
-    }
+    return m.groupdict()
 
 
 def parse_legacy_filename(name: str) -> dict | None:
@@ -708,7 +709,7 @@ def parse_legacy_filename(name: str) -> dict | None:
 - [ ] **Step 4: Verify tests pass**
 
 ```bash
-.venv/bin/python -m pytest tests/sources/test_individual_tiff.py -v -k "parse_"
+.venv/bin/python -m pytest tests/sources/test_single_tiff.py -v -k "parse_"
 ```
 
 Expected: all pass.
@@ -725,7 +726,7 @@ Expected: all pass.
 
 ```bash
 git add -A
-git commit -m "Add squid + legacy filename parsers to individual_tiff
+git commit -m "Add squid + legacy filename parsers to single_tiff
 
 Two regexes — module-level so they're shared across detect/build/glob
 and unit-tested independently. Squid format: optional <well>_ prefix
@@ -741,9 +742,9 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ## Task 6: Detect squid layout and discover composite FOVs in `build()`
 
 **Files:**
-- Modify: `src/gallery_view/sources/individual_tiff.py`
-- Modify: `tests/conftest.py` (add `make_squid_individual_tiff_acq`)
-- Modify: `tests/sources/test_individual_tiff.py`
+- Modify: `src/gallery_view/sources/single_tiff.py`
+- Modify: `tests/conftest.py` (add `make_squid_single_tiff_acq`)
+- Modify: `tests/sources/test_single_tiff.py`
 
 - [ ] **Step 1: Add the squid fixture to conftest**
 
@@ -751,7 +752,7 @@ Append to `tests/conftest.py`:
 
 ```python
 @pytest.fixture
-def make_squid_individual_tiff_acq(tmp_path):
+def make_squid_single_tiff_acq(tmp_path):
     """Build an acquisition in squid's per-image TIFF layout.
 
     ``<acq>/<t>/[<well>_]<region>_<fov>_<z>_<channel>.tiff``
@@ -809,34 +810,34 @@ def make_squid_individual_tiff_acq(tmp_path):
 
 - [ ] **Step 2: Write failing tests**
 
-Append to `tests/sources/test_individual_tiff.py`:
+Append to `tests/sources/test_single_tiff.py`:
 
 ```python
-def test_detect_squid_layout(handler, make_squid_individual_tiff_acq):
-    folder = make_squid_individual_tiff_acq()
+def test_detect_squid_layout(handler, make_squid_single_tiff_acq):
+    folder = make_squid_single_tiff_acq()
     assert handler.detect(str(folder)) is True
 
 
-def test_detect_squid_layout_with_well_prefix(handler, make_squid_individual_tiff_acq):
-    folder = make_squid_individual_tiff_acq(with_well_prefix=True)
+def test_detect_squid_layout_with_well_prefix(handler, make_squid_single_tiff_acq):
+    folder = make_squid_single_tiff_acq(with_well_prefix=True)
     assert handler.detect(str(folder)) is True
 
 
-def test_legacy_layout_still_detects(handler, make_individual_tiff_acq):
-    folder = make_individual_tiff_acq()
+def test_legacy_layout_still_detects(handler, make_single_tiff_acq):
+    folder = make_single_tiff_acq()
     assert handler.detect(str(folder)) is True
 
 
-def test_build_discovers_composite_fovs(handler, make_squid_individual_tiff_acq):
-    folder = make_squid_individual_tiff_acq(regions=2, fovs_per_region=2)
+def test_build_discovers_composite_fovs(handler, make_squid_single_tiff_acq):
+    folder = make_squid_single_tiff_acq(regions=2, fovs_per_region=2)
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
     assert acq is not None
     assert acq.fovs == ["0_0", "0_1", "1_0", "1_1"]
     assert acq.selected_fov == "0_0"
 
 
-def test_legacy_build_uses_zero_region(handler, make_individual_tiff_acq):
-    folder = make_individual_tiff_acq()
+def test_legacy_build_uses_zero_region(handler, make_single_tiff_acq):
+    folder = make_single_tiff_acq()
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
     assert acq is not None
     assert acq.fovs == ["0_0"]
@@ -845,14 +846,14 @@ def test_legacy_build_uses_zero_region(handler, make_individual_tiff_acq):
 - [ ] **Step 3: Run them to verify failure**
 
 ```bash
-.venv/bin/python -m pytest tests/sources/test_individual_tiff.py -v -k "detect_squid or composite_fovs or legacy_build_uses_zero"
+.venv/bin/python -m pytest tests/sources/test_single_tiff.py -v -k "detect_squid or composite_fovs or legacy_build_uses_zero"
 ```
 
 Expected: FAILs on the squid-specific tests.
 
 - [ ] **Step 4: Implement detect + build (and update `list_fovs`)**
 
-In `src/gallery_view/sources/individual_tiff.py`, also replace the existing `list_fovs` (currently hard-coded to `["0"]`) to return the acquisition's discovered list:
+In `src/gallery_view/sources/single_tiff.py`, also replace the existing `list_fovs` (currently hard-coded to `["0"]`) to return the acquisition's discovered list:
 
 ```python
 def list_fovs(self, acq: Acquisition) -> list[str]:
@@ -968,7 +969,7 @@ def _channels_from_filenames(folder: str, layout: str, timepoint: str) -> list[C
 - [ ] **Step 5: Run the new tests**
 
 ```bash
-.venv/bin/python -m pytest tests/sources/test_individual_tiff.py -v -k "detect_squid or composite_fovs or legacy_build_uses_zero or legacy_layout_still_detects"
+.venv/bin/python -m pytest tests/sources/test_single_tiff.py -v -k "detect_squid or composite_fovs or legacy_build_uses_zero or legacy_layout_still_detects"
 ```
 
 Expected: all pass.
@@ -979,7 +980,7 @@ Expected: all pass.
 .venv/bin/python -m pytest tests/ -q
 ```
 
-Expected: all pass. Note that some pre-existing tests may rely on `acq.fovs == ["0"]` for the legacy fixture — they should now expect `["0_0"]`. Update those assertions in `test_individual_tiff.py` (only) if any fail.
+Expected: all pass. Note that some pre-existing tests may rely on `acq.fovs == ["0"]` for the legacy fixture — they should now expect `["0_0"]`. Update those assertions in `test_single_tiff.py` (only) if any fail.
 
 - [ ] **Step 7: Commit**
 
@@ -987,7 +988,7 @@ Expected: all pass. Note that some pre-existing tests may rely on `acq.fovs == [
 git add -A
 git commit -m "Detect squid layout, discover composite <region>_<fov> FOVs
 
-IndividualTiffHandler.detect now recognises both <acq>/0/current_…
+SingleTiffHandler.detect now recognises both <acq>/0/current_…
 (legacy) and <acq>/<t>/<region>_<fov>_<z>_<channel>.tiff (squid, with
 optional <well>_ prefix). build() records the chosen layout in
 acq.extra['layout'] and populates acq.fovs with composite '<region>_
@@ -1002,25 +1003,25 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ## Task 7: Discover multi-timepoint in `build()`
 
 **Files:**
-- Modify: `tests/sources/test_individual_tiff.py`
+- Modify: `tests/sources/test_single_tiff.py`
 
 (`_timepoints_for` was implemented in Task 6; this task adds the test that exercises it on a real `nt=3` fixture.)
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/sources/test_individual_tiff.py`:
+Append to `tests/sources/test_single_tiff.py`:
 
 ```python
-def test_build_discovers_multiple_timepoints(handler, make_squid_individual_tiff_acq):
-    folder = make_squid_individual_tiff_acq(nt=3)
+def test_build_discovers_multiple_timepoints(handler, make_squid_single_tiff_acq):
+    folder = make_squid_single_tiff_acq(nt=3)
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
     assert acq is not None
     assert acq.timepoints == ["0", "1", "2"]
     assert acq.selected_timepoint == "0"
 
 
-def test_legacy_acq_has_single_timepoint(handler, make_individual_tiff_acq):
-    folder = make_individual_tiff_acq()
+def test_legacy_acq_has_single_timepoint(handler, make_single_tiff_acq):
+    folder = make_single_tiff_acq()
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
     assert acq is not None
     assert acq.timepoints == ["0"]
@@ -1030,7 +1031,7 @@ def test_legacy_acq_has_single_timepoint(handler, make_individual_tiff_acq):
 - [ ] **Step 2: Run to verify it passes (Task 6 already implemented this)**
 
 ```bash
-.venv/bin/python -m pytest tests/sources/test_individual_tiff.py::test_build_discovers_multiple_timepoints tests/sources/test_individual_tiff.py::test_legacy_acq_has_single_timepoint -v
+.venv/bin/python -m pytest tests/sources/test_single_tiff.py::test_build_discovers_multiple_timepoints tests/sources/test_single_tiff.py::test_legacy_acq_has_single_timepoint -v
 ```
 
 Expected: PASS for both. If the legacy test fails because `acq.timepoints` is missing, double-check Task 3 + Task 6 wiring before continuing.
@@ -1047,7 +1048,7 @@ Expected: all pass.
 
 ```bash
 git add -A
-git commit -m "Test multi-timepoint discovery in IndividualTiffHandler.build
+git commit -m "Test multi-timepoint discovery in SingleTiffHandler.build
 
 Adds explicit assertions that nt>1 squid acquisitions report all
 <t>/ subdirs in acq.timepoints (and that legacy folders stay at
@@ -1062,17 +1063,17 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ## Task 8: Use `timepoint` in `iter_z_slices`, `load_full_stack`, `iter_full_channel_stacks`
 
 **Files:**
-- Modify: `src/gallery_view/sources/individual_tiff.py`
-- Modify: `tests/sources/test_individual_tiff.py`
+- Modify: `src/gallery_view/sources/single_tiff.py`
+- Modify: `tests/sources/test_single_tiff.py`
 
 - [ ] **Step 1: Write failing tests**
 
-Append to `tests/sources/test_individual_tiff.py`:
+Append to `tests/sources/test_single_tiff.py`:
 
 ```python
-def test_iter_z_slices_uses_timepoint(handler, make_squid_individual_tiff_acq):
+def test_iter_z_slices_uses_timepoint(handler, make_squid_single_tiff_acq):
     """Slices for timepoint='1' must come from <acq>/1/, not <acq>/0/."""
-    folder = make_squid_individual_tiff_acq(nt=2, nz=3)
+    folder = make_squid_single_tiff_acq(nt=2, nz=3)
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
     slices_t0 = list(handler.iter_z_slices(acq, "0_0", acq.channels[0], timepoint="0"))
     slices_t1 = list(handler.iter_z_slices(acq, "0_0", acq.channels[0], timepoint="1"))
@@ -1084,23 +1085,23 @@ def test_iter_z_slices_uses_timepoint(handler, make_squid_individual_tiff_acq):
 
 
 def test_iter_z_slices_unknown_timepoint_returns_empty(
-    handler, make_squid_individual_tiff_acq,
+    handler, make_squid_single_tiff_acq,
 ):
-    folder = make_squid_individual_tiff_acq(nt=1)
+    folder = make_squid_single_tiff_acq(nt=1)
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
     slices = list(handler.iter_z_slices(acq, "0_0", acq.channels[0], timepoint="42"))
     assert slices == []
 
 
-def test_load_full_stack_uses_timepoint(handler, make_squid_individual_tiff_acq):
-    folder = make_squid_individual_tiff_acq(nt=2, nz=3)
+def test_load_full_stack_uses_timepoint(handler, make_squid_single_tiff_acq):
+    folder = make_squid_single_tiff_acq(nt=2, nz=3)
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
     stack = handler.load_full_stack(acq, "0_0", acq.channels[0], timepoint="1")
     assert stack.shape == (3, 8, 10)
 
 
-def test_legacy_iter_z_slices_still_works(handler, make_individual_tiff_acq):
-    folder = make_individual_tiff_acq(nz=4)
+def test_legacy_iter_z_slices_still_works(handler, make_single_tiff_acq):
+    folder = make_single_tiff_acq(nz=4)
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
     slices = list(handler.iter_z_slices(acq, "0_0", acq.channels[0]))
     assert len(slices) == 4
@@ -1109,14 +1110,14 @@ def test_legacy_iter_z_slices_still_works(handler, make_individual_tiff_acq):
 - [ ] **Step 2: Run to verify failure**
 
 ```bash
-.venv/bin/python -m pytest tests/sources/test_individual_tiff.py -v -k "uses_timepoint or unknown_timepoint or legacy_iter_z_slices"
+.venv/bin/python -m pytest tests/sources/test_single_tiff.py -v -k "uses_timepoint or unknown_timepoint or legacy_iter_z_slices"
 ```
 
 Expected: FAIL — current `_tiffs_for` ignores `timepoint`.
 
 - [ ] **Step 3: Update `_tiffs_for` to consume `timepoint` and parse the composite FOV**
 
-In `src/gallery_view/sources/individual_tiff.py`:
+In `src/gallery_view/sources/single_tiff.py`:
 
 ```python
 @staticmethod
@@ -1186,12 +1187,12 @@ def iter_full_channel_stacks(
 
 - [ ] **Step 5: Update existing legacy iter test**
 
-Open `tests/sources/test_individual_tiff.py` and find any pre-existing assertions that pass `fov="0"` to `iter_z_slices`. Change them to `fov="0_0"` to match the new composite-FOV format. (The legacy fixture now reports `acq.fovs == ["0_0"]`.)
+Open `tests/sources/test_single_tiff.py` and find any pre-existing assertions that pass `fov="0"` to `iter_z_slices`. Change them to `fov="0_0"` to match the new composite-FOV format. (The legacy fixture now reports `acq.fovs == ["0_0"]`.)
 
 - [ ] **Step 6: Run all new tests**
 
 ```bash
-.venv/bin/python -m pytest tests/sources/test_individual_tiff.py -v
+.venv/bin/python -m pytest tests/sources/test_single_tiff.py -v
 ```
 
 Expected: all pass.
@@ -1208,7 +1209,7 @@ Expected: all pass.
 
 ```bash
 git add -A
-git commit -m "Use timepoint when globbing TIFFs in IndividualTiffHandler
+git commit -m "Use timepoint when globbing TIFFs in SingleTiffHandler
 
 iter_z_slices / load_full_stack / iter_full_channel_stacks now look in
 <acq>/<t>/ instead of always <acq>/0/, and split the composite FOV
@@ -1239,12 +1240,12 @@ These tests previously covered the dropped single-channel handler and the now-re
 The existing tests use `scan.ingest(path)` — match that style:
 
 ```python
-def test_ingest_detects_squid_individual_tiff(make_squid_individual_tiff_acq):
-    folder = make_squid_individual_tiff_acq(nt=2, regions=2, fovs_per_region=2)
+def test_ingest_detects_squid_single_tiff(make_squid_single_tiff_acq):
+    folder = make_squid_single_tiff_acq(nt=2, regions=2, fovs_per_region=2)
     acqs = scan.ingest(str(folder))
     assert len(acqs) == 1
     acq = acqs[0]
-    assert acq.handler.name == "individual_tiff"
+    assert acq.handler.name == "single_tiff"
     assert acq.timepoints == ["0", "1"]
     assert acq.fovs == ["0_0", "0_1", "1_0", "1_1"]
 ```
@@ -1254,10 +1255,10 @@ def test_ingest_detects_squid_individual_tiff(make_squid_individual_tiff_acq):
 - [ ] **Step 3: Add a multi-timepoint cache-key test in `tests/test_handler_cache_integration.py`**
 
 ```python
-def test_cache_keys_distinct_across_timepoints(make_squid_individual_tiff_acq):
-    folder = make_squid_individual_tiff_acq(nt=2)
-    from gallery_view.sources.individual_tiff import IndividualTiffHandler
-    handler = IndividualTiffHandler()
+def test_cache_keys_distinct_across_timepoints(make_squid_single_tiff_acq):
+    folder = make_squid_single_tiff_acq(nt=2)
+    from gallery_view.sources.single_tiff import SingleTiffHandler
+    handler = SingleTiffHandler()
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
     k_t0 = handler.cache_key(acq, acq.fovs[0], acq.channels[0], timepoint="0")
     k_t1 = handler.cache_key(acq, acq.fovs[0], acq.channels[0], timepoint="1")
@@ -1415,7 +1416,7 @@ Update every caller in this file to pass `acq.selected_timepoint` (and the FOV).
 .venv/bin/python -m gallery_view --source /path/to/squid/multi-timepoint/data
 ```
 
-(Substitute a real path. If you don't have a multi-timepoint dataset, build one with `make_squid_individual_tiff_acq(nt=3)` in a Python REPL and point gallery-view at the resulting tmp folder.)
+(Substitute a real path. If you don't have a multi-timepoint dataset, build one with `make_squid_single_tiff_acq(nt=3)` in a Python REPL and point gallery-view at the resulting tmp folder.)
 
 Verify:
 - Single-timepoint acquisitions show no Time combo.
@@ -1460,8 +1461,8 @@ Replace the existing table with:
 | Format          | Layout                                                                |
 |-----------------|-----------------------------------------------------------------------|
 | `ome_tiff`      | `<acq>/ome_tiff/current_0.ome.tiff` — one OME-TIFF holding every (z, channel) |
-| `individual_tiff` (squid) | `<acq>/<t>/[<well>_]<region>_<fov>_<z>_<channel>.tiff` — one TIFF per (t, region, fov, z, channel); multi-timepoint supported via per-row Time combo |
-| `individual_tiff` (legacy) | `<acq>/0/current_<fov>_<z>_<channel>.tiff` — older squid output, still supported |
+| `single_tiff` (squid) | `<acq>/<t>/[<well>_]<region>_<fov>_<z>_<channel>.tiff` — one TIFF per (t, region, fov, z, channel); multi-timepoint supported via per-row Time combo |
+| `single_tiff` (legacy) | `<acq>/0/current_<fov>_<z>_<channel>.tiff` — older squid output, still supported |
 ```
 
 Also update the "Features" section to mention the Time combo for multi-timepoint datasets.
@@ -1470,9 +1471,9 @@ Also update the "Features" section to mention the Time combo for multi-timepoint
 
 ```bash
 git add README.md
-git commit -m "README: describe individual_tiff (squid + legacy) layouts
+git commit -m "README: describe single_tiff (squid + legacy) layouts
 
-Drops the single_channel_tiff row, splits individual_tiff into squid
+Drops the single_channel_tiff row, splits single_tiff into squid
 and legacy sub-rows so users can see at a glance which layout matches
 their data, and adds a one-line note about the Time combo for
 multi-timepoint acquisitions.
