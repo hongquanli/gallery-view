@@ -88,6 +88,14 @@ class SingleChannelTiffHandler:
             )
         return np.stack([imread(f) for f in tiffs])
 
+    def iter_full_channel_stacks(
+        self, acq: Acquisition, fov: str
+    ) -> Iterator[tuple[Channel, np.ndarray]]:
+        # Each channel lives in its own folder of TIFFs — no shared parent
+        # buffer concern; per-channel loading is already efficient.
+        for channel in acq.channels:
+            yield channel, self.load_full_stack(acq, fov, channel)
+
     def channel_yaml_extras(
         self, acq: Acquisition, channel: Channel
     ) -> dict:

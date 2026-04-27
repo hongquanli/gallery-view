@@ -174,17 +174,38 @@ class OmeTiffHandler:
     def load_full_stack(
         self, acq: Acquisition, fov: str, channel: Channel
     ) -> np.ndarray:
-        # Use ``series.asarray()`` rather than per-page reads: tifffile
-        # consults the OME metadata to reorder pages into logical
-        # ``ZCYX``/``TCYX`` order, which matters for files like XLight V3
-        # that declare ``DimensionOrder="XYCZT"`` but store pages C-major.
-        # ``series[0]`` always returns the first ``Image`` element's data,
-        # not raw storage pages. This mirrors aion-explorer's approach.
+        # Single-channel callers: ``series.asarray()`` reads the OME Plane
+        # metadata internally and reshapes pages into logical ZCYX/TCYX
+        # order, which matters for files like XLight V3 that declare
+        # ``DimensionOrder="XYCZT"`` but store pages C-major. Multi-channel
+        # callers should use :py:meth:`iter_full_channel_stacks` to avoid
+        # reloading the full file once per channel.
         ch_idx = self._channel_index(acq, channel)
         with TiffFile(acq.extra["ome_path"]) as tif:
             s = tif.series[0]
             data = s.asarray()
             axes = s.axes
+        return self._slice_channel(data, axes, ch_idx)
+
+    def iter_full_channel_stacks(
+        self, acq: Acquisition, fov: str
+    ) -> Iterator[tuple[Channel, np.ndarray]]:
+        """Load the OME-TIFF once, then yield each channel as a ZYX view.
+
+        ``data[:, ch_idx, :, :]`` returns a numpy view that shares memory
+        with the parent ``data`` array — so the four channel views in a
+        4-channel acquisition all point at the same ~5GB buffer rather
+        than each holding its own copy.
+        """
+        with TiffFile(acq.extra["ome_path"]) as tif:
+            s = tif.series[0]
+            data = s.asarray()
+            axes = s.axes
+        for ch_idx, channel in enumerate(acq.channels):
+            yield channel, self._slice_channel(data, axes, ch_idx)
+
+    @staticmethod
+    def _slice_channel(data: np.ndarray, axes: str, ch_idx: int) -> np.ndarray:
         if axes == "CYX":
             return data[ch_idx][np.newaxis, :, :]
         if axes == "YX":

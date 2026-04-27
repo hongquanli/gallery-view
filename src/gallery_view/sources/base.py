@@ -59,6 +59,20 @@ class FormatHandler(Protocol):
         """Return the full ZYX stack (float32 or native dtype) for napari."""
         ...
 
+    def iter_full_channel_stacks(
+        self, acq: Acquisition, fov: str
+    ) -> Iterator[tuple[Channel, np.ndarray]]:
+        """Yield ``(Channel, ZYX-stack)`` pairs for every channel in ``fov``.
+
+        Default handlers can implement this as a per-channel loop on top of
+        :py:meth:`load_full_stack`, but formats that bundle all channels in
+        one file (notably OME-TIFF) should override it to load the file
+        ONCE and slice — calling ``load_full_stack`` per channel for an
+        OME-TIFF would re-load the entire (potentially multi-GB) file
+        each time.
+        """
+        ...
+
     def channel_yaml_extras(
         self, acq: Acquisition, channel: Channel
     ) -> dict:

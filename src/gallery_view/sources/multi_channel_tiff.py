@@ -86,6 +86,15 @@ class MultiChannelTiffHandler:
             )
         return np.stack([imread(f) for f in tiffs])
 
+    def iter_full_channel_stacks(
+        self, acq: Acquisition, fov: str
+    ) -> Iterator[tuple[Channel, np.ndarray]]:
+        # Each channel lives in its own set of TIFFs, so per-channel loading
+        # is already memory-efficient — no shared parent buffer to worry
+        # about. Just delegate to load_full_stack.
+        for channel in acq.channels:
+            yield channel, self.load_full_stack(acq, fov, channel)
+
     def channel_yaml_extras(
         self, acq: Acquisition, channel: Channel
     ) -> dict:

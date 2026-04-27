@@ -119,6 +119,37 @@ def test_build_page_map_z_major_storage():
     assert pm[(0, 2, 1)] == 5
 
 
+def test_iter_full_channel_stacks_shares_buffer_across_channels(
+    handler, make_ome_tiff_acq
+):
+    """All channel stacks must share one underlying numpy buffer, otherwise
+    we'd hold N copies of a multi-GB OME-TIFF in RAM (the original 30-GB
+    blowup on a 4-channel XLight V3 file). Use ``np.shares_memory`` to
+    confirm slices view the same parent."""
+    folder = make_ome_tiff_acq(wavelengths=("488", "561", "638"), nz=3, ny=4, nx=5)
+    acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
+    pairs = list(handler.iter_full_channel_stacks(acq, "0"))
+    assert len(pairs) == 3
+    # First channel's stack must share storage with second and third.
+    _, s0 = pairs[0]
+    _, s1 = pairs[1]
+    _, s2 = pairs[2]
+    assert np.shares_memory(s0, s1)
+    assert np.shares_memory(s0, s2)
+
+
+def test_iter_full_channel_stacks_yields_correct_channels(
+    handler, make_ome_tiff_acq
+):
+    folder = make_ome_tiff_acq(wavelengths=("488", "638"), nz=3, ny=4, nx=5)
+    acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
+    pairs = list(handler.iter_full_channel_stacks(acq, "0"))
+    assert [c.wavelength for c, _ in pairs] == ["488", "638"]
+    # Each per-channel slice has shape (nz, ny, nx)
+    for _, stack in pairs:
+        assert stack.shape == (3, 4, 5)
+
+
 def test_build_page_map_c_major_storage_xlight_pattern():
     """XLight V3 pattern: each channel's full Z stack is contiguous, even
     though the file declares ``DimensionOrder='XYCZT'``. Pages 0..nz-1

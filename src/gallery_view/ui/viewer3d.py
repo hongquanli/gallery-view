@@ -39,11 +39,17 @@ def open_napari(
     viewer = napari.Viewer(ndisplay=3, title=title)
 
     first_shape: tuple[int, int, int] | None = None
-    for ch_idx, channel in enumerate(acq.channels):
-        try:
-            stack = acq.handler.load_full_stack(acq, fov, channel)
-        except Exception:
-            continue
+    # ``iter_full_channel_stacks`` lets the OME-TIFF handler load the file
+    # ONCE and yield per-channel views that share the underlying buffer,
+    # rather than load_full_stack reloading the whole multi-GB file once
+    # per channel (~4× memory blowup for a 4-channel acquisition).
+    channel_index = {c.name: i for i, c in enumerate(acq.channels)}
+    try:
+        stack_iter = acq.handler.iter_full_channel_stacks(acq, fov)
+    except Exception:
+        return
+    for channel, stack in stack_iter:
+        ch_idx = channel_index.get(channel.name, 0)
         clim = lut_lookup(ch_idx, "current") or lut_lookup(ch_idx, "z")
         if clim is None:
             clim = (
