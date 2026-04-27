@@ -419,7 +419,9 @@ class GalleryWindow(QMainWindow):
             self.source_groups[grp_idx].setVisible(any_visible)
 
         # If a load has settled and the filters wipe everything, tell the
-        # user — otherwise the window looks broken.
+        # user — otherwise the window looks broken. When filters loosen and
+        # rows reappear, replace the "all hidden" message rather than leave
+        # it stale on the status bar.
         total_rows = len(self.row_widgets)
         if total_rows and total_visible == 0:
             reasons = []
@@ -430,6 +432,10 @@ class GalleryWindow(QMainWindow):
             why = " and ".join(reasons) if reasons else "filters"
             self.status.setText(
                 f"All {total_rows} rows hidden by {why}."
+            )
+        elif total_rows:
+            self.status.setText(
+                f"{total_visible}/{total_rows} acquisitions visible"
             )
 
     def _fovs_for_row(self, acq_id: int) -> list[str]:
@@ -497,10 +503,7 @@ class GalleryWindow(QMainWindow):
             acq = self.acquisitions[acq_id]
             if acq is None:
                 continue
-            fovs_for_this_acq = (
-                acq.fovs if self.expanded_fov_mode else [acq.selected_fov]
-            )
-            for fov in fovs_for_this_acq:
+            for fov in self._fovs_for_row(acq_id):
                 key = RowKey(acq_id, fov)
                 self.row_keys.append(key)
                 row = self._make_row_widget(key, acq, active_wls)
