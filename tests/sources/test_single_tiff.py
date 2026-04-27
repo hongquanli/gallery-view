@@ -22,6 +22,13 @@ def test_detect_returns_false_for_other_formats(
     assert handler.detect(str(make_ome_tiff_acq())) is False
 
 
+def test_cache_key_includes_timepoint(handler, make_single_tiff_acq):
+    folder = make_single_tiff_acq(wavelengths=("488",))
+    acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
+    _, ch_id = handler.cache_key(acq, "0", acq.channels[0], timepoint="2")
+    assert "/t2/" in ch_id
+
+
 def test_build_populates_acquisition(handler, make_single_tiff_acq):
     folder = make_single_tiff_acq(wavelengths=("488", "638"))
     acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})

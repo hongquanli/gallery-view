@@ -66,8 +66,7 @@ class OmeTiffHandler:
     def cache_key(
         self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> tuple[str, str]:
-        # OME-TIFF stores all timepoints in one file; timepoint kwarg ignored.
-        return acq.extra["ome_path"], f"fov{fov}/wl_{channel.wavelength}"
+        return acq.extra["ome_path"], f"fov{fov}/t{timepoint}/wl_{channel.wavelength}"
 
     def iter_z_slices(
         self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
