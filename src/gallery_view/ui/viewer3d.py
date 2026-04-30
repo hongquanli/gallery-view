@@ -9,7 +9,7 @@ from typing import Callable
 
 import numpy as np
 
-from ..sources._squid_common import parse_mag, parse_timestamp
+from ..sources._squid_common import parse_timestamp, resolve_mag
 from ..types import Acquisition
 from .colors import napari_cmap_for
 
@@ -26,7 +26,7 @@ def open_napari(
     import napari
 
     sensor_pixel_um = acq.params.get("sensor_pixel_size_um", 6.5)
-    mag = parse_mag(acq.folder_name) or 1
+    mag = resolve_mag(acq.folder_name, acq.params) or 1
     pixel_um = sensor_pixel_um / mag if mag else sensor_pixel_um
     dz_um = acq.params.get("dz(um)", pixel_um)
     scale = (dz_um, pixel_um, pixel_um)

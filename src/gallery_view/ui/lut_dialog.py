@@ -22,7 +22,7 @@ from qtpy.QtWidgets import (
 
 from .. import cache
 from ..mips import mip_to_rgba
-from ..sources._squid_common import display_fov, parse_mag
+from ..sources._squid_common import display_fov, resolve_mag
 from ..types import Acquisition, AxisMip
 from .colors import rgb_for
 from .zoomable_view import ZoomableImageView
@@ -64,7 +64,7 @@ def show_lut_dialog(
                 snapshot[(acq_id, timepoint, fov, ci, ax)] = (entry.p1, entry.p999)
 
     dlg = QDialog(parent)
-    mag = parse_mag(acq.folder_name) or "?"
+    mag = resolve_mag(acq.folder_name, acq.params) or "?"
     dlg.setWindowTitle(
         f"LUT — {acq.display_name} | {mag}x | FOV {display_fov(fov)} | {axis_label}"
     )

@@ -185,3 +185,28 @@ def test_display_fov_passthrough_for_unstructured_id():
     """Inputs that don't match the composite shape are returned as-is."""
     assert common.display_fov("nonsense") == "nonsense"
     assert common.display_fov("") == ""
+
+
+# ── resolve_mag ───────────────────────────────────────────────────────────
+
+
+def test_resolve_mag_prefers_folder_name():
+    assert common.resolve_mag("25x_C3_2026-…", {"objective": {"magnification": 10}}) == 25
+
+
+def test_resolve_mag_falls_back_to_params_objective():
+    """Squid's standard JSON path: acquisition parameters.json has
+    objective.magnification (a float). Folder names without an "Nx_" prefix
+    (like the new 'multi-d-scan_…' style) rely entirely on this."""
+    assert common.resolve_mag(
+        "multi-d-scan_2026-04-29_17-17-33", {"objective": {"magnification": 10.0}}
+    ) == 10
+
+
+def test_resolve_mag_falls_back_to_params_mag_legacy_key():
+    assert common.resolve_mag("multi-d-scan", {"mag": 20}) == 20
+
+
+def test_resolve_mag_returns_none_when_unknown():
+    assert common.resolve_mag("multi-d-scan", {}) is None
+    assert common.resolve_mag("multi-d-scan", None) is None
