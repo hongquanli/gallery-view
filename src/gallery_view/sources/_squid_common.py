@@ -119,9 +119,14 @@ def resolve_mag(folder_name: str, params: dict | None) -> int | None:
     Tries the folder name first (legacy ``25x_<well>_…`` convention),
     then ``params['objective']['magnification']`` (squid's standard JSON
     field, set by ``acquisition parameters.json``), then ``params['mag']``
-    as a last resort. Returns int or None.
+    as a last resort.
+
+    Returns an int — non-integer mag values (e.g. a hypothetical ``2.5x``
+    objective) are truncated, not rounded. Squid only emits integer mags
+    today; revisit the return type if a writer ships fractional mags.
+    Returns None when no source has a usable value.
     """
-    mag = parse_mag(folder_name)
+    mag = _parse_mag(folder_name)
     if mag is not None:
         return mag
     if params:
@@ -142,7 +147,10 @@ def resolve_mag(folder_name: str, params: dict | None) -> int | None:
     return None
 
 
-def parse_mag(folder_name: str) -> int | None:
-    """Pull the leading magnification (e.g. ``25`` from ``25x_…``) or None."""
+def _parse_mag(folder_name: str) -> int | None:
+    """Pull the leading magnification (e.g. ``25`` from ``25x_…``) or None.
+
+    Private — call ``resolve_mag`` instead, which handles params fallback.
+    """
     m = re.match(r"(\d+)x_", folder_name)
     return int(m.group(1)) if m else None

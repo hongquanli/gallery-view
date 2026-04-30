@@ -43,6 +43,11 @@ _COMBO_STYLE = (
     " selection-background-color: #2d5aa0; selection-color: white;"
     " border: 1px solid #555; }"
 )
+# Pixels added to the longest item's text width to leave room for the
+# dropdown arrow, the border, and a touch of breathing room. Tuned for
+# the 11px font in ``_COMBO_STYLE`` at default DPI; revisit if the theme
+# font size or a non-default DPI throws off the visible padding.
+_COMBO_PADDING_PX = 40
 
 
 def _style_combo(combo: "QComboBox") -> None:
@@ -66,8 +71,7 @@ def _size_combo_to_contents(combo: "QComboBox") -> None:
         (metrics.horizontalAdvance(combo.itemText(i)) for i in range(combo.count())),
         default=0,
     )
-    # Pad for the dropdown arrow, border, and a touch of breathing room.
-    width = longest + 40
+    width = longest + _COMBO_PADDING_PX
     combo.setMinimumWidth(width)
     combo.view().setMinimumWidth(width)
 
