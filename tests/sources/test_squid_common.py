@@ -133,7 +133,7 @@ def test_channel_extras_returns_empty_when_missing(tmp_path):
     )
 
 
-# ── display_name_for + parse_timestamp + parse_mag ──
+# ── display_name_for + parse_timestamp ──
 
 
 def test_display_name_strips_timestamp():
@@ -156,14 +156,6 @@ def test_parse_timestamp_returns_mmdd_hhmm():
 
 def test_parse_timestamp_none_when_missing():
     assert common.parse_timestamp("no timestamp here") is None
-
-
-def test_parse_mag_extracts_int():
-    assert common.parse_mag("25x_A1_2026-04-26_12-00-00.000000") == 25
-
-
-def test_parse_mag_none_when_no_prefix():
-    assert common.parse_mag("A1_no_mag") is None
 
 
 # ── display_fov ───────────────────────────────────────────────────────────
