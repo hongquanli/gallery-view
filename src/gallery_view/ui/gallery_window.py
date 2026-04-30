@@ -23,13 +23,53 @@ from qtpy.QtWidgets import (
 from .. import scan
 from ..loader import Job, MipLoader
 from ..mips import mip_to_rgba
-from ..sources._squid_common import display_fov, parse_mag, parse_timestamp
+from ..sources._squid_common import display_fov, parse_timestamp, resolve_mag
 from ..types import Acquisition, AxisMip
 from .colors import CHANNEL_ORDER, rgb_for
 
 THIN_Z_THRESHOLD = 5
 THUMB_SIZE_PRESETS = [("Small", 80), ("Medium", 160), ("Large", 320)]
 DEFAULT_THUMB_SIZE = 160
+
+# QComboBox popups are top-level Qt widgets, so the QMainWindow stylesheet
+# doesn't cascade in. Style each combo explicitly — both the closed widget
+# and its QAbstractItemView popup — so light-on-light-grey doesn't make
+# the dropdown unreadable.
+_COMBO_STYLE = (
+    "QComboBox { background-color: #333; color: white; border: 1px solid #555;"
+    " border-radius: 3px; padding: 2px 8px; font-size: 11px; }"
+    "QComboBox::drop-down { border: none; }"
+    "QComboBox QAbstractItemView { background-color: #2a2a2a; color: white;"
+    " selection-background-color: #2d5aa0; selection-color: white;"
+    " border: 1px solid #555; }"
+)
+
+
+def _style_combo(combo: "QComboBox") -> None:
+    """Apply the dark-theme stylesheet to a QComboBox.
+
+    Call ``_size_combo_to_contents(combo)`` AFTER ``addItem`` to size the
+    closed widget and its popup view to the longest item.
+    """
+    combo.setStyleSheet(_COMBO_STYLE)
+
+
+def _size_combo_to_contents(combo: "QComboBox") -> None:
+    """Set the combo's minimum width — and its popup view's minimum width
+    — so the longest item shows without clipping. ``AdjustToContents``
+    alone isn't enough: with the dark stylesheet applied, macOS Qt
+    renders short items like ``t=12`` clipped to ``t=`` in the popup.
+    Must be called after items have been added.
+    """
+    metrics = combo.fontMetrics()
+    longest = max(
+        (metrics.horizontalAdvance(combo.itemText(i)) for i in range(combo.count())),
+        default=0,
+    )
+    # Pad for the dropdown arrow, border, and a touch of breathing room.
+    width = longest + 40
+    combo.setMinimumWidth(width)
+    combo.view().setMinimumWidth(width)
 
 
 @dataclass
@@ -191,8 +231,10 @@ class GalleryWindow(QMainWindow):
         size_lbl.setStyleSheet("color: #888; font-size: 11px;")
         row.addWidget(size_lbl)
         self.size_combo = QComboBox()
+        _style_combo(self.size_combo)
         for label, size in THUMB_SIZE_PRESETS:
             self.size_combo.addItem(label, size)
+        _size_combo_to_contents(self.size_combo)
         self.size_combo.setCurrentIndex(
             next(i for i, (_, s) in enumerate(THUMB_SIZE_PRESETS) if s == DEFAULT_THUMB_SIZE)
         )
@@ -366,14 +408,12 @@ class GalleryWindow(QMainWindow):
     # ── stub hooks filled in by later tasks ──
 
     def _rebuild_mag_filter(self) -> None:
-        from ..sources._squid_common import parse_mag
-
         # Collect distinct mags from current acquisitions
         mags = set()
         for acq in self.acquisitions:
             if acq is None:
                 continue
-            mag = parse_mag(acq.folder_name)
+            mag = resolve_mag(acq.folder_name, acq.params)
             if mag is not None:
                 mags.add(mag)
 
@@ -408,7 +448,7 @@ class GalleryWindow(QMainWindow):
             acq = self.acquisitions[acq_id]
             visible = acq is not None
             if visible and self.mag_checkboxes:
-                mag = parse_mag(acq.folder_name)
+                mag = resolve_mag(acq.folder_name, acq.params)
                 visible = mag in active_mags if mag is not None else True
             if visible and hide_thin and acq.shape_zyx is not None:
                 visible = acq.shape_zyx[0] >= THIN_Z_THRESHOLD
@@ -547,7 +587,7 @@ class GalleryWindow(QMainWindow):
         h.setContentsMargins(4, 2, 4, 2)
         h.setSpacing(4)
 
-        mag = parse_mag(acq.folder_name) or acq.params.get("mag") or "?"
+        mag = resolve_mag(acq.folder_name, acq.params) or "?"
         mag_lbl = QLabel(f"{mag}x" if isinstance(mag, int) else str(mag))
         mag_lbl.setFixedWidth(30)
         mag_lbl.setStyleSheet("color: #ccc; font-size: 11px; font-weight: bold;")
@@ -614,8 +654,10 @@ class GalleryWindow(QMainWindow):
         time_combo: QComboBox | None = None
         if len(acq.timepoints) > 1:
             time_combo = QComboBox()
+            _style_combo(time_combo)
             for t in acq.timepoints:
                 time_combo.addItem(f"t={t}", t)
+            _size_combo_to_contents(time_combo)
             time_combo.setCurrentIndex(acq.timepoints.index(acq.selected_timepoint))
             time_combo.currentIndexChanged.connect(
                 lambda i, k=key, c=time_combo: self._on_timepoint_changed(k, c.itemData(i))
@@ -626,8 +668,10 @@ class GalleryWindow(QMainWindow):
         fov_combo: QComboBox | None = None
         if not self.expanded_fov_mode and len(acq.fovs) > 1:
             fov_combo = QComboBox()
+            _style_combo(fov_combo)
             for fov in acq.fovs:
                 fov_combo.addItem(f"FOV {display_fov(fov)}", fov)
+            _size_combo_to_contents(fov_combo)
             fov_combo.setCurrentIndex(acq.fovs.index(acq.selected_fov))
             fov_combo.currentIndexChanged.connect(
                 lambda i, k=key, c=fov_combo: self._on_fov_changed(k, c.itemData(i))
@@ -701,7 +745,7 @@ class GalleryWindow(QMainWindow):
         if acq is None:
             return 1.0
         sensor_pixel_um = acq.params.get("sensor_pixel_size_um", 6.5)
-        mag = parse_mag(acq.folder_name) or acq.params.get("mag") or 1
+        mag = resolve_mag(acq.folder_name, acq.params) or 1
         pixel_um = sensor_pixel_um / mag if mag else sensor_pixel_um
         dz_um = acq.params.get("dz(um)", pixel_um)
         shape = acq.shape_zyx

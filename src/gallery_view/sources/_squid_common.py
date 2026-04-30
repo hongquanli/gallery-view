@@ -113,6 +113,35 @@ def parse_timestamp(folder_name: str) -> tuple[str, str] | None:
     return f"{m.group(2)}-{m.group(3)}", f"{m.group(4)}:{m.group(5)}"
 
 
+def resolve_mag(folder_name: str, params: dict | None) -> int | None:
+    """Best-effort magnification lookup.
+
+    Tries the folder name first (legacy ``25x_<well>_…`` convention),
+    then ``params['objective']['magnification']`` (squid's standard JSON
+    field, set by ``acquisition parameters.json``), then ``params['mag']``
+    as a last resort. Returns int or None.
+    """
+    mag = parse_mag(folder_name)
+    if mag is not None:
+        return mag
+    if params:
+        obj = params.get("objective") or {}
+        if isinstance(obj, dict):
+            v = obj.get("magnification")
+            if v is not None:
+                try:
+                    return int(float(v))
+                except (TypeError, ValueError):
+                    pass
+        v = params.get("mag")
+        if v is not None:
+            try:
+                return int(float(v))
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
 def parse_mag(folder_name: str) -> int | None:
     """Pull the leading magnification (e.g. ``25`` from ``25x_…``) or None."""
     m = re.match(r"(\d+)x_", folder_name)
