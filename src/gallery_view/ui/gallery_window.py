@@ -770,6 +770,21 @@ class GalleryWindow(QMainWindow):
         aspect = self._phys_aspect(acq_id, fov, self.view_axis)
         return self.thumb_size, max(20, int(round(self.thumb_size * aspect)))
 
+    def _image_render_size(
+        self, acq_id, fov, cell_w: int, cell_h: int
+    ) -> tuple[int, int]:
+        """Pixmap size that fits in the cell while preserving physical aspect.
+
+        In non-square mode the cell already matches physical aspect so this
+        returns ``(cell_w, cell_h)``. In square_footprint mode it returns a
+        letterboxed size; the QLabel's center alignment fills the rest.
+        """
+        aspect = self._phys_aspect(acq_id, fov, self.view_axis)
+        cell_aspect = cell_h / max(cell_w, 1)
+        if cell_aspect >= aspect:
+            return cell_w, max(1, int(round(cell_w * aspect)))
+        return max(1, int(round(cell_h / max(aspect, 1e-9)))), cell_h
+
     def _apply_label_sizes(self) -> None:
         for (acq_id, timepoint, fov), rw in self.row_widgets.items():
             self._apply_label_sizes_for(acq_id, timepoint, fov, rw)
@@ -794,9 +809,10 @@ class GalleryWindow(QMainWindow):
         rgba = mip_to_rgba(ax_mip.mip, ax_mip.p1, ax_mip.p999, rgb_for(wl))
         h, w = rgba.shape[:2]
         qimg = QImage(rgba.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
-        target_w, target_h = self._row_label_size(acq_id, fov)
+        cell_w, cell_h = self._row_label_size(acq_id, fov)
+        img_w, img_h = self._image_render_size(acq_id, fov, cell_w, cell_h)
         pixmap = QPixmap.fromImage(qimg).scaled(
-            target_w, target_h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation
+            img_w, img_h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation
         )
         rw.thumb_labels[ch_idx].setPixmap(pixmap)
         rw.thumb_labels[ch_idx].setStyleSheet(
