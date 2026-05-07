@@ -15,7 +15,7 @@ import platformdirs
 
 from .types import AxisMip, ChannelMips, ShapeZYX
 
-CACHE_VERSION = 4  # v4: cache key includes /t<t>/ for multi-timepoint single_tiff
+CACHE_VERSION = 5  # v5: YZ mip is (Nz, Ny), no longer transposed
 AXES = ("z", "y", "x")
 CACHE_DIR = str(Path(platformdirs.user_cache_dir("gallery-view")) / "mips")
 

@@ -46,7 +46,7 @@ def test_finalize_y_and_x_match_numpy_max():
         mips.accumulate_axes(stack[z], state)
     finalized = mips.finalize(state)
     np.testing.assert_array_equal(finalized["y"], stack.max(axis=1))
-    np.testing.assert_array_equal(finalized["x"], stack.max(axis=2).T)
+    np.testing.assert_array_equal(finalized["x"], stack.max(axis=2))
 
 
 def test_finalize_returns_none_when_no_slices():
