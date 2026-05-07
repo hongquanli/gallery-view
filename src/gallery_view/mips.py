@@ -30,15 +30,23 @@ def accumulate_axes(img: np.ndarray, state: dict) -> None:
 
 
 def finalize(state: dict) -> dict | None:
-    """Turn accumulator state into ``{axis: 2D mip}`` or ``None`` if empty."""
+    """Turn accumulator state into ``{axis: 2D mip}`` or ``None`` if empty.
+
+    Mip shapes follow a consistent "Z is the row axis" convention so the
+    rest of the pipeline can scale rows by ``dz/pixel`` to recover physical
+    proportions:
+      ``z`` → (Ny, Nx)  — XY view
+      ``y`` → (Nz, Nx)  — XZ view
+      ``x`` → (Nz, Ny)  — YZ view
+    """
     if state["z"] is None:
         return None
     return {
         "z": state["z"],
         "y": np.stack(state["y_strips"]) if state["y_strips"] else state["z"][:1],
-        "x": np.stack(state["x_strips"]).T
+        "x": np.stack(state["x_strips"])
         if state["x_strips"]
-        else state["z"][:, :1].T,
+        else state["z"][:, :1],
     }
 
 
