@@ -27,7 +27,13 @@ def parse_acquisition_channels_yaml(folder: str) -> list[Channel]:
     """Read ``<folder>/acquisition_channels.yaml`` -> list of Channel.
 
     Returns ``[]`` if the file is absent or unparseable. Channels marked
-    ``enabled: false`` are excluded. Output is sorted by wavelength.
+    ``enabled: false`` are excluded.
+
+    Order follows the yaml — which is also the OME-TIFF page order, since
+    Squid writes channels to disk in yaml order. ``OmeTiffHandler`` uses
+    ``acq.channels`` position as a page index, so reordering here would
+    desync the lookup. The gallery UI imposes its own column order via
+    ``CHANNEL_ORDER``, so callers don't need a pre-sorted list.
     """
     yaml_path = os.path.join(folder, "acquisition_channels.yaml")
     if not os.path.exists(yaml_path):
@@ -47,9 +53,6 @@ def parse_acquisition_channels_yaml(folder: str) -> list[Channel]:
         wl_match = re.search(r"(\d+)[\s_]*nm", name)
         wl = wl_match.group(1) if wl_match else "unknown"
         channels.append(Channel(name=name, wavelength=wl))
-    channels.sort(
-        key=lambda c: int(c.wavelength) if c.wavelength.isdigit() else 999
-    )
     return channels
 
 

@@ -122,3 +122,21 @@ def test_iter_full_channel_stacks_yields_correct_channels(
     # Each per-channel slice has shape (nz, ny, nx)
     for _, stack in pairs:
         assert stack.shape == (3, 4, 5)
+
+
+def test_channel_data_matches_label_when_yaml_order_is_unsorted(
+    handler, make_ome_tiff_acq
+):
+    """Regression: yaml-order ≠ wavelength-sorted order. The conftest's
+    gradient encodes the channel slot as a +1000-per-slot offset, so we can
+    verify that a channel named "638" returns the data written into the
+    638-slot, not whichever slot wavelength-sorted order would have placed
+    it in. Catches the bug where channels were sorted by wavelength but the
+    OME-TIFF page index still followed yaml order, silently swapping data."""
+    folder = make_ome_tiff_acq(wavelengths=("638", "488"), nz=3, ny=4, nx=5)
+    acq = handler.build(str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5})
+    by_wl = {c.wavelength: c for c in acq.channels}
+    s638 = next(handler.iter_z_slices(acq, "0", by_wl["638"]))
+    s488 = next(handler.iter_z_slices(acq, "0", by_wl["488"]))
+    # Slot 0 (638nm) was written with offset 0; slot 1 (488nm) with +1000.
+    assert s638.min() < 1000 <= s488.min()
