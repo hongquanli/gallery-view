@@ -69,14 +69,16 @@ def test_channels_yaml_skips_disabled(tmp_path):
     assert [c.wavelength for c in channels] == ["488"]
 
 
-def test_channels_yaml_sorts_by_wavelength(tmp_path):
+def test_channels_yaml_preserves_yaml_order(tmp_path):
+    """OME-TIFF channel page index follows yaml order, so the parser must
+    not sort. The gallery UI imposes its own column order downstream."""
     _write(tmp_path, channels=[
         {"name": "Fluorescence_638_nm_Ex", "enabled": True},
         {"name": "Fluorescence_488_nm_Ex", "enabled": True},
         {"name": "Fluorescence_405_nm_Ex", "enabled": True},
     ])
     channels = common.parse_acquisition_channels_yaml(str(tmp_path))
-    assert [c.wavelength for c in channels] == ["405", "488", "638"]
+    assert [c.wavelength for c in channels] == ["638", "488", "405"]
 
 
 def test_channels_yaml_missing_returns_empty(tmp_path):
