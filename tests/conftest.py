@@ -123,6 +123,82 @@ def make_single_tiff_acq(tmp_path):
 
 
 @pytest.fixture
+def make_stack_tiff_acq(tmp_path):
+    """Build a stack-per-FOV acquisition: ``<acq>/<t>/<region>_<fov>_stack.tiff``,
+    each TIFF holding all (z, channel) planes z-major with a JSON
+    ImageDescription tag per page.
+    """
+
+    def _build(
+        wavelengths=("730", "488", "405"),
+        nz=3,
+        ny=4,
+        nx=5,
+        nt=1,
+        region="current",
+        n_fovs=1,
+        folder_name="_2026-05-08_18-50-05.640535",
+        sensor_pixel_size_um=6.5,
+        dz_um=1.0,
+        mag=60,
+        write_configurations_xml=True,
+        per_page_meta=True,
+    ) -> Path:
+        folder = tmp_path / folder_name
+        folder.mkdir()
+        params = {
+            "sensor_pixel_size_um": sensor_pixel_size_um,
+            "dz(um)": dz_um,
+            "objective": {"magnification": float(mag)},
+        }
+        if not per_page_meta:
+            # Implicit layout needs Nz in params so the handler can derive Nc.
+            params["Nz"] = nz
+        _write_params(folder, params)
+        if write_configurations_xml:
+            # Squid stores channels in *reverse* XML doc order (see
+            # ``_selected_fluorescence_modes`` for why). To make
+            # ``wavelengths`` represent the on-disk page order — i.e., the
+            # order tests will see in ``acq.channels`` — we write the XML
+            # modes in the reverse of ``wavelengths``.
+            xml_order_wavelengths = list(reversed(wavelengths))
+            modes = "".join(
+                f'<mode ID="{i}" Name="Fluorescence {wl} nm Ex" '
+                f'ExposureTime="{50.0 + i}" IlluminationIntensity="{25.0 + i}" '
+                f'Selected="true">0</mode>'
+                for i, wl in enumerate(xml_order_wavelengths)
+            )
+            (folder / "configurations.xml").write_text(f"<modes>{modes}</modes>")
+        for t in range(nt):
+            t_dir = folder / str(t)
+            t_dir.mkdir()
+            for fov_idx in range(n_fovs):
+                # tifffile.imwrite only accepts one description; per-page
+                # ImageDescription tags need TiffWriter + .write per page.
+                with tifffile.TiffWriter(
+                    t_dir / f"{region}_{fov_idx}_stack.tiff"
+                ) as tw:
+                    for z in range(nz):
+                        for c, wl in enumerate(wavelengths):
+                            page = _gradient_3d(nz, ny, nx, c)[z]
+                            if per_page_meta:
+                                desc = json.dumps({
+                                    "z_level": z,
+                                    "channel": f"Fluorescence {wl} nm Ex",
+                                    "channel_index": c,
+                                    "region_id": region,
+                                    "fov": fov_idx,
+                                    "shape": [ny, nx],
+                                })
+                            else:
+                                desc = json.dumps({"shape": [ny, nx]})
+                            tw.write(page, description=desc, contiguous=False)
+        return folder
+
+    return _build
+
+
+@pytest.fixture
 def make_squid_single_tiff_acq(tmp_path):
     """Build an acquisition in squid's per-image TIFF layout.
 
