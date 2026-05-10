@@ -17,6 +17,15 @@ Two metadata flavours are handled:
     data; once those datasets are reprocessed or aged out, the path can
     be removed.
 
+    **Caveat**: squid writes channels to disk in the order the user
+    clicked them in the acquisition-configuration UI. That click order
+    is *not* preserved in ``configurations.xml``, so the page→channel
+    mapping is not strictly recoverable from the file. We approximate it
+    as reverse XML doc order, which happens to match the legacy datasets
+    on hand but is a heuristic — channels on other legacy data may load
+    with swapped labels and need visual verification. Newer per_page_meta
+    files are immune; each page names its own channel.
+
 ``configurations.xml`` also provides per-channel exposure/intensity for
 the export footer; there is no ``acquisition_channels.yaml``.
 """
@@ -335,20 +344,20 @@ def _parse_modes_xml(folder: str) -> list[dict]:
 
 
 def _selected_fluorescence_modes(folder: str) -> list[str]:
-    """Selected fluorescence-mode names in disk order (reverse XML doc order).
+    """Best-effort guess at the legacy implicit-layout channel order.
 
-    Used **only by the legacy implicit-layout path**. The current squid
-    writes per-page metadata that pins each page to a specific channel by
-    name, so XML order doesn't matter there. This helper exists to read
-    older Dragonfly data that pre-dates per-page metadata.
+    The actual on-disk channel order is the order the user clicked the
+    channels in squid's acquisition-configuration UI; that click order
+    is *not* recorded in ``configurations.xml``, so this helper can only
+    approximate. Empirically, the click order has been the reverse of
+    XML doc order for the Dragonfly/Widefield datasets we have on hand,
+    so we reverse here.
 
-    Squid writes channels to those legacy TIFFs in *reverse* of the XML's
-    selected-mode order — verified empirically: a Widefield acquisition
-    whose configurations.xml selected modes were 405, 488, 730 produced
-    per-page metadata pinning ``channel_index`` 0,1,2 to 730,488,405 nm.
-    If a future legacy file ever surfaces with a different convention,
-    this function is the single place to revisit. New acquisitions are
-    immune.
+    Used **only** by the legacy implicit-layout path. New acquisitions
+    write per-page metadata that pins each page to a specific channel
+    by name, so this guess never affects them. If a legacy file shows
+    swapped channel labels, this function (and the caveat in the module
+    docstring) is the single place to revisit.
     """
     selected = [
         m["name"] for m in _parse_modes_xml(folder)
