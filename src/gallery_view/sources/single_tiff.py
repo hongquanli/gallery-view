@@ -267,11 +267,7 @@ class SingleTiffHandler:
             if p is None:
                 continue
             names.add(p["channel"])
-        out: list[Channel] = []
-        for name in sorted(names):
-            wl_m = re.search(r"(\d+)_nm", name)
-            wl = wl_m.group(1) if wl_m else "unknown"
-            out.append(Channel(name=name, wavelength=wl))
+        out = [common.make_channel_from_name(name) for name in sorted(names)]
         out.sort(
             key=lambda c: int(c.wavelength) if c.wavelength.isdigit() else 999
         )

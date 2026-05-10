@@ -10,6 +10,19 @@ from ..types import Channel
 
 KNOWN_WAVELENGTHS = frozenset({"405", "488", "561", "638", "730"})
 
+_WAVELENGTH_RE = re.compile(r"(\d+)[\s_]*nm")
+
+
+def make_channel_from_name(name: str) -> Channel:
+    """Build a ``Channel`` from a squid channel name like
+    ``"Fluorescence_488_nm_Ex"`` or ``"Fluorescence 488 nm Ex"``.
+
+    The wavelength is the first ``\\d+`` immediately followed by ``"nm"``
+    (with optional whitespace/underscore), or ``"unknown"`` if absent.
+    """
+    m = _WAVELENGTH_RE.search(name)
+    return Channel(name=name, wavelength=m.group(1) if m else "unknown")
+
 
 def parse_acquisition_params(folder: str) -> dict | None:
     """Read ``<folder>/acquisition parameters.json`` or return None."""
@@ -50,9 +63,7 @@ def parse_acquisition_channels_yaml(folder: str) -> list[Channel]:
         name = ch.get("name", "")
         if not name:
             continue
-        wl_match = re.search(r"(\d+)[\s_]*nm", name)
-        wl = wl_match.group(1) if wl_match else "unknown"
-        channels.append(Channel(name=name, wavelength=wl))
+        channels.append(make_channel_from_name(name))
     return channels
 
 
