@@ -5,14 +5,17 @@ FOV per timepoint, with all (z, channel) planes interleaved as pages.
 
 Two metadata flavours are handled:
 
-  * **per_page_meta** (Widefield): each page carries a JSON
+  * **per_page_meta** (current squid): each page carries a JSON
     ``ImageDescription`` with ``z_level``, ``channel``, ``channel_index``,
     ``region_id``, ``fov`` — authoritative for channel order and z mapping.
-  * **implicit** (Dragonfly): ``ImageDescription`` only has ``shape``. We
-    derive ``Nc = total_pages / Nz`` from ``acquisition parameters.json``
-    and read channel names from ``configurations.xml`` — Squid stores
-    channels in reverse XML doc order. Page order is z-major:
-    ``page = z * Nc + c``.
+    All future acquisitions take this path.
+  * **implicit** (legacy — early Dragonfly builds, before per-page metadata
+    was added): ``ImageDescription`` only has ``shape``. We derive
+    ``Nc = total_pages / Nz`` from ``acquisition parameters.json`` and read
+    channel names from ``configurations.xml``. Page order is z-major:
+    ``page = z * Nc + c``. This path is only here to read existing legacy
+    data; once those datasets are reprocessed or aged out, the path can
+    be removed.
 
 ``configurations.xml`` also provides per-channel exposure/intensity for
 the export footer; there is no ``acquisition_channels.yaml``.
@@ -334,11 +337,18 @@ def _parse_modes_xml(folder: str) -> list[dict]:
 def _selected_fluorescence_modes(folder: str) -> list[str]:
     """Selected fluorescence-mode names in disk order (reverse XML doc order).
 
-    Squid writes channels to TIFF in *reverse* of the XML's selected-mode
-    order — verified empirically: a Widefield acquisition whose
-    configurations.xml selected modes were 405, 488, 730 produced per-page
-    metadata pinning ``channel_index`` 0,1,2 to 730,488,405 nm. If this
-    convention ever changes, this function is the single place to revisit.
+    Used **only by the legacy implicit-layout path**. The current squid
+    writes per-page metadata that pins each page to a specific channel by
+    name, so XML order doesn't matter there. This helper exists to read
+    older Dragonfly data that pre-dates per-page metadata.
+
+    Squid writes channels to those legacy TIFFs in *reverse* of the XML's
+    selected-mode order — verified empirically: a Widefield acquisition
+    whose configurations.xml selected modes were 405, 488, 730 produced
+    per-page metadata pinning ``channel_index`` 0,1,2 to 730,488,405 nm.
+    If a future legacy file ever surfaces with a different convention,
+    this function is the single place to revisit. New acquisitions are
+    immune.
     """
     selected = [
         m["name"] for m in _parse_modes_xml(folder)

@@ -164,6 +164,79 @@ def test_implicit_layout_pairs_data_with_correct_channel(
     assert s_a.min() < 1000 <= s_b.min()
 
 
+def test_implicit_layout_iter_full_channel_stacks_pairs_correctly(
+    handler, make_stack_tiff_acq
+):
+    """The 3D viewer (napari) goes through ``iter_full_channel_stacks``.
+    For the legacy implicit path the page→channel mapping is arithmetic
+    (``page = z * nc + c``); regress the channel/data pairing the same
+    way the per_page_meta variant tests it."""
+    folder = make_stack_tiff_acq(
+        wavelengths=("405", "730"), nz=2, ny=3, nx=4,
+        per_page_meta=False,
+    )
+    from gallery_view.sources._squid_common import parse_acquisition_params
+    acq = handler.build(str(folder), parse_acquisition_params(str(folder)) or {})
+    pairs = list(handler.iter_full_channel_stacks(acq, acq.selected_fov))
+    assert [c.wavelength for c, _ in pairs] == ["405", "730"]
+    # Slot 0 → 405, gradient offset 0; slot 1 → 730, offset +1000.
+    (_, s_405), (_, s_730) = pairs
+    assert s_405.shape == (2, 3, 4)
+    assert s_405.min() < 1000 <= s_730.min()
+
+
+def test_per_page_meta_skips_pages_with_partial_metadata(
+    handler, make_stack_tiff_acq, tmp_path
+):
+    """If a page is missing ``z_level`` or ``channel_index``, drop it
+    rather than treating ``None`` as a valid index. Build still
+    succeeds for the well-formed pages."""
+    import json
+    import tifffile
+    folder = tmp_path / "_2026-05-08_partial.000000"
+    folder.mkdir()
+    (folder / "acquisition parameters.json").write_text(
+        json.dumps({"sensor_pixel_size_um": 6.5, "dz(um)": 1.0})
+    )
+    t_dir = folder / "0"
+    t_dir.mkdir()
+    with tifffile.TiffWriter(t_dir / "current_0_stack.tiff") as tw:
+        # Two well-formed pages (z=0,1 of channel 0) and one corrupt page
+        # missing z_level — the handler should ignore the corrupt one.
+        tw.write(np.zeros((3, 4), dtype=np.uint16), description=json.dumps({
+            "z_level": 0, "channel": "Fluorescence 488 nm Ex",
+            "channel_index": 0, "region_id": "current", "fov": 0,
+        }), contiguous=False)
+        tw.write(np.ones((3, 4), dtype=np.uint16), description=json.dumps({
+            "z_level": 1, "channel": "Fluorescence 488 nm Ex",
+            "channel_index": 0, "region_id": "current", "fov": 0,
+        }), contiguous=False)
+        tw.write(np.zeros((3, 4), dtype=np.uint16), description=json.dumps({
+            "channel": "Fluorescence 488 nm Ex",  # no z_level
+            "channel_index": 0, "region_id": "current", "fov": 0,
+        }), contiguous=False)
+    acq = handler.build(str(folder), {"dz(um)": 1.0, "sensor_pixel_size_um": 6.5})
+    assert acq is not None
+    assert [c.wavelength for c in acq.channels] == ["488"]
+    # Corrupt page dropped → 2 z-slices, not 3.
+    assert handler.read_shape(acq, acq.selected_fov) == (2, 3, 4)
+
+
+def test_implicit_layout_returns_none_when_configurations_xml_missing(
+    handler, make_stack_tiff_acq, tmp_path
+):
+    """Implicit path needs configurations.xml to map slots to channels.
+    Without it (or with no Selected="true" fluorescence modes) build must
+    refuse rather than return generic channel labels."""
+    folder = make_stack_tiff_acq(
+        wavelengths=("405", "730"), nz=2, ny=3, nx=4,
+        per_page_meta=False, write_configurations_xml=False,
+    )
+    from gallery_view.sources._squid_common import parse_acquisition_params
+    acq = handler.build(str(folder), parse_acquisition_params(str(folder)) or {})
+    assert acq is None
+
+
 def test_implicit_layout_returns_none_when_xml_count_mismatches(
     handler, make_stack_tiff_acq
 ):
