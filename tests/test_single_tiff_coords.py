@@ -46,7 +46,7 @@ def test_load_coords_missing_file_returns_none(make_squid_single_tiff_acq):
     assert "coords_by_region" not in acq.extra
 
 
-def test_load_coords_malformed_csv_returns_none(make_squid_single_tiff_acq, tmp_path):
+def test_load_coords_malformed_csv_returns_none(make_squid_single_tiff_acq):
     """Missing required columns -> None, no exception."""
     folder = make_squid_single_tiff_acq(
         regions=1, fovs_per_region=1, write_coords=True,
@@ -72,3 +72,37 @@ def test_load_coords_caches_result(make_squid_single_tiff_acq):
     first = handler._load_coords(acq)
     second = handler._load_coords(acq)
     assert first is second  # identity, not just equality
+
+
+def test_load_coords_empty_csv_returns_none(make_squid_single_tiff_acq):
+    """A CSV with only a header row returns None and does NOT populate
+    acq.extra['coords_by_region']."""
+    folder = make_squid_single_tiff_acq(
+        regions=1, fovs_per_region=1, write_coords=True,
+    )
+    (folder / "0" / "coordinates.csv").write_text(
+        "region,fov,z_level,x (mm),y (mm),z (um),time\n"
+    )
+    from gallery_view.sources.single_tiff import SingleTiffHandler
+    handler = SingleTiffHandler()
+    acq = handler.build(
+        str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5}
+    )
+    assert handler._load_coords(acq) is None
+    assert "coords_by_region" not in acq.extra
+
+
+def test_load_coords_sorts_composite_fovs_numerically(make_squid_single_tiff_acq):
+    """fov '0_2' must sort before '0_10' so Task 6 iteration order is correct."""
+    folder = make_squid_single_tiff_acq(
+        regions=1, fovs_per_region=11, write_coords=True,
+    )
+    from gallery_view.sources.single_tiff import SingleTiffHandler
+    handler = SingleTiffHandler()
+    acq = handler.build(
+        str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5}
+    )
+    coords = handler._load_coords(acq)
+    assert coords is not None
+    order = [c.fov for c in coords["0"]]
+    assert order == [f"0_{i}" for i in range(11)]

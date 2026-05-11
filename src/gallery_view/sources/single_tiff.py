@@ -52,6 +52,12 @@ def parse_legacy_filename(name: str) -> dict | None:
     return m.groupdict()
 
 
+def _fov_sort_key(coord) -> tuple:
+    """Natural sort key for FovCoord composites: '0_2' < '0_10' < '1_0'."""
+    parts = coord.fov.split("_")
+    return tuple(int(p) if p.isdigit() else p for p in parts)
+
+
 class SingleTiffHandler:
     name = "single_tiff"
 
@@ -142,7 +148,7 @@ class SingleTiffHandler:
                     region = str(row["region"])
                     fov_idx = str(row["fov"])
                     key = (region, fov_idx)
-                    if key in seen and row.get("z_level") not in ("0", 0, "0.0"):
+                    if key in seen and row.get("z_level") not in ("0", "0.0"):
                         continue
                     try:
                         x_mm = float(row["x (mm)"])
@@ -157,9 +163,11 @@ class SingleTiffHandler:
         result: dict[str, list[FovCoord]] = {}
         for (region, _), coord in seen.items():
             result.setdefault(region, []).append(coord)
-        # Sort each region's coords by composite fov string for determinism.
+        if not result:
+            return None
+        # Sort each region's coords by composite fov for determinism.
         for region in result:
-            result[region].sort(key=lambda c: c.fov)
+            result[region].sort(key=_fov_sort_key)
         acq.extra["coords_by_region"] = result
         return result
 
