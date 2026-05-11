@@ -1,0 +1,32 @@
+"""SingleTiffHandler populates Acquisition.regions / selected_region."""
+
+from gallery_view.sources.single_tiff import SingleTiffHandler
+
+
+def test_single_region_squid_folder_has_one_region(make_squid_single_tiff_acq):
+    """A folder with FOVs all under region '0' yields regions == ['0']."""
+    folder = make_squid_single_tiff_acq(regions=1, fovs_per_region=2)
+    acq = SingleTiffHandler().build(
+        str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5}
+    )
+    assert acq is not None
+    assert acq.regions == ["0"]
+    assert acq.selected_region == "0"
+
+
+def test_multi_region_numeric_regions_sort_numerically(make_squid_single_tiff_acq):
+    """Numeric region ids sort as ints, not strings (so '10' comes after '2')."""
+    folder = make_squid_single_tiff_acq(regions=12, fovs_per_region=1)
+    acq = SingleTiffHandler().build(
+        str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5}
+    )
+    assert acq.regions == [str(i) for i in range(12)]
+
+
+def test_legacy_folder_gets_single_region(make_single_tiff_acq):
+    """Legacy current_<fov>_<z>_<channel>.tiff folders have regions == ['0']."""
+    folder = make_single_tiff_acq()
+    acq = SingleTiffHandler().build(
+        str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5}
+    )
+    assert acq.regions == ["0"]

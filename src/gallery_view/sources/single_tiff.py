@@ -71,6 +71,7 @@ class SingleTiffHandler:
             channels = self._channels_from_filenames(folder, layout, timepoints[0])
         if not channels:
             return None
+        regions = self._regions_from_fovs(fovs)
         folder_name = os.path.basename(folder)
         return Acquisition(
             handler=self,
@@ -83,6 +84,8 @@ class SingleTiffHandler:
             selected_fov=fovs[0],
             timepoints=timepoints,
             selected_timepoint=timepoints[0],
+            regions=regions,
+            selected_region=regions[0],
             extra={"layout": layout},
         )
 
@@ -252,6 +255,28 @@ class SingleTiffHandler:
             r, f = pair
             return (0 if r.isdigit() else 1, int(r) if r.isdigit() else r, int(f))
         return [f"{r}_{f}" for r, f in sorted(seen, key=sort_key)]
+
+    @staticmethod
+    def _regions_from_fovs(fovs: list[str]) -> list[str]:
+        """Distinct region prefixes from composite '<region>_<fov>' strings,
+        sorted: numeric regions as ints, alphanumeric (well names) using a
+        digit-aware key so 'A2' precedes 'A10'."""
+        seen: set[str] = set()
+        for fov in fovs:
+            region = fov.split("_", 1)[0] if "_" in fov else "0"
+            seen.add(region)
+
+        def sort_key(r: str) -> tuple:
+            # Numeric regions sort first as ints; alphanumeric follow with a
+            # (alpha_prefix, int_suffix) decomposition for natural ordering.
+            if r.isdigit():
+                return (0, int(r), "")
+            m = re.match(r"^([A-Za-z]+)(\d+)$", r)
+            if m:
+                return (1, int(m.group(2)), m.group(1))
+            return (2, 0, r)
+
+        return sorted(seen, key=sort_key)
 
     @staticmethod
     def _channels_from_filenames(

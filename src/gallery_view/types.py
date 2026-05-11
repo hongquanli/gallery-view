@@ -58,4 +58,6 @@ class Acquisition:
     selected_fov: str = "0"
     timepoints: list[str] = field(default_factory=lambda: ["0"])
     selected_timepoint: str = "0"
+    regions: list[str] = field(default_factory=lambda: ["0"])
+    selected_region: str = "0"
     extra: dict = field(default_factory=dict)
