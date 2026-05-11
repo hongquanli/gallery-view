@@ -239,3 +239,40 @@ def test_remove_source_prunes_region_state(qapp, make_squid_single_tiff_acq):
         assert win._region_fov_readiness == {}
     finally:
         win.close()
+
+
+def test_adjust_lut_in_region_view_uses_cache_key_region(qapp, make_squid_single_tiff_acq, monkeypatch):
+    """Clicking 'Adjust Contrast' on a region row passes a key_fn that routes
+    to cache_key_region, not cache_key."""
+    from gallery_view.types import AxisMip
+    import numpy as np
+    from gallery_view.ui import gallery_window as gw_mod
+    from gallery_view.ui.gallery_window import GalleryWindow, RowKey
+
+    folder = make_squid_single_tiff_acq(regions=2, fovs_per_region=1, write_coords=True)
+    win = GalleryWindow()
+    captured: dict = {}
+
+    def fake_show_lut_dialog(**kwargs):
+        captured.update(kwargs)
+        # Don't actually open a dialog.
+
+    monkeypatch.setattr(
+        "gallery_view.ui.lut_dialog.show_lut_dialog", fake_show_lut_dialog
+    )
+
+    try:
+        win._add_source(str(folder))
+        win._set_view_mode("region")
+        win.region_mip_data[(0, "0", "0", 0)] = AxisMip(
+            mip=np.zeros((2, 2), dtype=np.float32), p1=0.0, p999=1.0,
+        )
+        key = RowKey(acq_id=0, timepoint="0", fov="0")  # region "0"
+        win._adjust_lut(key)
+        assert captured.get("unit_label") == "Region"
+        # The key_fn should route to cache_key_region.
+        acq = win.acquisitions[0]
+        src, ch_id = captured["key_fn"](acq, "0", acq.channels[0], "0")
+        assert ch_id.startswith("region:0/")
+    finally:
+        win.close()

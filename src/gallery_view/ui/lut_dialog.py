@@ -23,7 +23,7 @@ from qtpy.QtWidgets import (
 from .. import cache
 from ..mips import mip_to_rgba
 from ..sources._squid_common import display_fov, resolve_mag
-from ..types import Acquisition, AxisMip
+from ..types import Acquisition, AxisMip, Channel
 from .colors import rgb_for
 from .zoomable_view import ZoomableImageView
 
@@ -41,7 +41,7 @@ def show_lut_dialog(
     mip_data: dict,
     refresh_thumb: Callable[[int, str, str, int, AxisMip], None],
     acq_id: int,
-    key_fn: Callable[[Acquisition, str, "Channel", str], tuple[str, str]] | None = None,
+    key_fn: Callable[[Acquisition, str, Channel, str], tuple[str, str]] | None = None,
     unit_label: str = "FOV",
 ) -> None:
     """Open the LUT dialog. ``mip_data`` is the gallery window's
