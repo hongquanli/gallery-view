@@ -50,3 +50,24 @@ def test_well_name_regions_order_matches_fovs_order(make_squid_single_tiff_acq):
         if r not in seen:
             seen.append(r)
     assert acq.regions == seen
+
+
+def test_fixture_writes_coordinates_csv(make_squid_single_tiff_acq):
+    """The fixture writes coordinates.csv with one row per (region, fov, z)
+    when ``write_coords=True``."""
+    import csv
+
+    folder = make_squid_single_tiff_acq(
+        regions=2, fovs_per_region=3, nz=2,
+        write_coords=True,
+    )
+    coords_path = folder / "0" / "coordinates.csv"
+    assert coords_path.exists(), f"coordinates.csv missing under {folder}"
+
+    with coords_path.open() as f:
+        rows = list(csv.DictReader(f))
+    # 2 regions * 3 fovs * 2 z = 12 rows
+    assert len(rows) == 12
+    assert {row["region"] for row in rows} == {"0", "1"}
+    # FOVs within a region are 0..2; values come back as strings.
+    assert {row["fov"] for row in rows} == {"0", "1", "2"}
