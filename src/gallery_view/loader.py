@@ -44,9 +44,9 @@ class RegionStitchJob:
     region: str
     channel: Channel
     ch_idx: int
-    timepoint: str
     fov_mips: dict[str, np.ndarray]    # composite fov_id -> (ny, nx) float32 Z-MIP
     coords: list[FovCoord]
+    timepoint: str = "0"
     target_longest_px: int = 1024
     flip_y: bool = False
 
@@ -117,8 +117,10 @@ class MipLoader(QThread):
                     self._process(job)
             except Exception as exc:  # noqa: BLE001
                 self._done += 1
-                kind = "region" if isinstance(job, RegionStitchJob) else (
-                    f"{job.channel.wavelength}nm"
+                kind = (
+                    f"region {job.region} {job.channel.wavelength}nm"
+                    if isinstance(job, RegionStitchJob)
+                    else f"{job.channel.wavelength}nm"
                 )
                 self._emit_progress(
                     f"failed {kind} — {job.acq.display_name}: {exc}"
