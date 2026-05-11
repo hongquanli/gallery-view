@@ -145,6 +145,7 @@ class GalleryWindow(QMainWindow):
         self.loader.mip_ready.connect(self._on_mip_ready)
         self.loader.progress.connect(self._on_progress)
         self.loader.idle.connect(self._on_idle)
+        self.loader.region_mip_ready.connect(self._on_region_mip_ready)
         self.loader.start()
 
         self._build_ui()
@@ -826,8 +827,93 @@ class GalleryWindow(QMainWindow):
     def _enqueue_region_prereqs(
         self, acq_id: int, acq, timepoint: str, region: str
     ) -> None:
-        """Wired up in Task 10."""
-        pass
+        """For region view: enqueue per-FOV Z-MIP jobs for every FOV in
+        ``region``, and register a readiness set we tick off as
+        ``_on_mip_ready`` lands MIPs. When the set is complete we enqueue
+        a ``RegionStitchJob`` per channel.
+
+        Cache hits short-circuit through the loader as usual; this method is
+        cheap to call repeatedly.
+        """
+        # FOVs in this region (composite '<region>_<fov>' filter on acq.fovs).
+        fovs_in_region = [f for f in acq.fovs if f.split("_", 1)[0] == region]
+        if not fovs_in_region:
+            return
+        key = (acq_id, timepoint, region)
+        needed: set[tuple[int, str]] = set()
+        for ch_idx in range(len(acq.channels)):
+            for fov in fovs_in_region:
+                needed.add((ch_idx, fov))
+        self._region_fov_readiness[key] = needed.copy()
+        # Track what's already in mip_data so the stitch trigger doesn't wait
+        # for jobs that already completed before we switched modes.
+        already = {
+            (ci, f)
+            for (a, t, f, ci, ax) in self.mip_data
+            if a == acq_id and t == timepoint and ax == "z" and (
+                ci, f
+            ) in needed
+        }
+        self._region_fov_readiness[key] -= already
+
+        # Enqueue any missing FOV jobs (loader skips cached ones in O(1)).
+        for ch_idx, channel in enumerate(acq.channels):
+            for fov in fovs_in_region:
+                if (ch_idx, fov) in already:
+                    continue
+                self.loader.enqueue(Job(
+                    acq_id=acq_id, acq=acq, fov=fov, channel=channel,
+                    ch_idx=ch_idx, timepoint=timepoint,
+                ))
+
+        # If all FOV MIPs were already in memory, fire stitches immediately.
+        if not self._region_fov_readiness[key]:
+            for ch_idx, channel in enumerate(acq.channels):
+                self._dispatch_region_stitch(
+                    acq_id, acq, timepoint, region, ch_idx, channel
+                )
+
+    def _dispatch_region_stitch(
+        self, acq_id: int, acq, timepoint: str, region: str,
+        ch_idx: int, channel,
+    ) -> None:
+        # Don't support region view for handlers that can't supply coords or
+        # a region cache key.
+        try:
+            coords_map = acq.handler._load_coords(acq) if hasattr(
+                acq.handler, "_load_coords"
+            ) else None
+        except AttributeError:
+            coords_map = None
+        if not coords_map or region not in coords_map:
+            self.status.setText(
+                f"{acq.display_name}: region view needs coordinates.csv"
+            )
+            return
+        coords = coords_map[region]
+
+        fov_mips = {
+            f: self.mip_data[(a, t, f, ci, ax)].mip
+            for (a, t, f, ci, ax) in list(self.mip_data)
+            if a == acq_id and t == timepoint and ci == ch_idx and ax == "z"
+            and f.split("_", 1)[0] == region
+        }
+        if not fov_mips:
+            return
+        self.loader.enqueue_region(RegionStitchJob(
+            acq_id=acq_id, acq=acq, region=region,
+            channel=channel, ch_idx=ch_idx, timepoint=timepoint,
+            fov_mips=fov_mips, coords=coords,
+        ))
+
+    def _on_region_mip_ready(
+        self, acq_id, timepoint, region, ch_idx, wavelength, ax_mip,
+    ) -> None:
+        if acq_id >= len(self.acquisitions) or self.acquisitions[acq_id] is None:
+            return
+        self.region_mip_data[(acq_id, timepoint, region, ch_idx)] = ax_mip
+        if self.view_mode == "region":
+            self._render_region_thumb(acq_id, timepoint, region, ch_idx, ax_mip)
 
     def _on_timepoint_changed(self, key, new_timepoint: str) -> None:
         acq = self.acquisitions[key.acq_id]
@@ -917,6 +1003,33 @@ class GalleryWindow(QMainWindow):
             "background-color: #111; border: 1px solid #2a2a2a; border-radius: 3px;"
         )
 
+    def _render_region_thumb(
+        self, acq_id, timepoint, region, ch_idx, ax_mip
+    ) -> None:
+        rw = self.row_widgets.get((acq_id, timepoint, region))
+        if rw is None or ch_idx not in rw.thumb_labels:
+            return
+        acq = self.acquisitions[acq_id]
+        wl = acq.channels[ch_idx].wavelength
+        rgba = mip_to_rgba(ax_mip.mip, ax_mip.p1, ax_mip.p999, rgb_for(wl))
+        h, w = rgba.shape[:2]
+        qimg = QImage(rgba.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
+        # Region thumbs scale to fit the cell, preserving the mosaic aspect.
+        cell = self.thumb_size
+        cell_aspect = 1.0
+        aspect = h / max(w, 1)
+        if aspect >= cell_aspect:
+            img_w, img_h = max(1, int(round(cell / max(aspect, 1e-9)))), cell
+        else:
+            img_w, img_h = cell, max(1, int(round(cell * aspect)))
+        pixmap = QPixmap.fromImage(qimg).scaled(
+            img_w, img_h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation
+        )
+        rw.thumb_labels[ch_idx].setPixmap(pixmap)
+        rw.thumb_labels[ch_idx].setStyleSheet(
+            "background-color: #111; border: 1px solid #2a2a2a; border-radius: 3px;"
+        )
+
     # ── loader callbacks ──
 
     def _on_mip_ready(
@@ -930,13 +1043,30 @@ class GalleryWindow(QMainWindow):
             acq.shape_zyx = shape
         for axis, ax_mip in channel_mips.items():
             self.mip_data[(acq_id, timepoint, fov, ch_idx, axis)] = ax_mip
-        if self.view_axis in channel_mips:
+        if self.view_axis in channel_mips and self.view_mode == "fov":
             self._render_thumb(
                 acq_id, timepoint, fov, ch_idx, channel_mips[self.view_axis]
             )
         # Aspect may have become known for this row; resize only this row.
         if shape_was_unknown and acq.shape_zyx is not None:
             self._apply_label_sizes_for(acq_id, timepoint, fov)
+
+        # Region-view readiness: tick this (ch_idx, fov) off the pending set;
+        # if the set is now empty, enqueue a stitch.
+        if self.view_mode == "region" and "z" in channel_mips:
+            region = fov.split("_", 1)[0] if "_" in fov else "0"
+            key = (acq_id, timepoint, region)
+            pending = self._region_fov_readiness.get(key)
+            if pending is not None:
+                pending.discard((ch_idx, fov))
+                if not pending:
+                    # All FOV MIPs for this region are in — stitch every channel.
+                    for ci, channel in enumerate(acq.channels):
+                        self._dispatch_region_stitch(
+                            acq_id, acq, timepoint, region, ci, channel
+                        )
+                    # Drop the readiness entry so we don't re-stitch.
+                    self._region_fov_readiness.pop(key, None)
 
     def _on_progress(self, done, queued, message) -> None:
         self.status.setText(f"{done}/{queued} channels — {message}")
@@ -972,6 +1102,19 @@ class GalleryWindow(QMainWindow):
             self.axis_buttons["y"].setEnabled(True)
             self.axis_buttons["x"].setEnabled(True)
         self._rebuild_rows()
+        if mode == "region":
+            for acq_id, acq in enumerate(self.acquisitions):
+                if acq is None:
+                    continue
+                for region in (
+                    acq.regions if self.expanded_region_mode else [acq.selected_region]
+                ):
+                    self._enqueue_region_prereqs(
+                        acq_id, acq, acq.selected_timepoint, region
+                    )
+            # Render any cached region thumbs we already have data for.
+            for (acq_id, t, region, ch_idx), ax_mip in self.region_mip_data.items():
+                self._render_region_thumb(acq_id, t, region, ch_idx, ax_mip)
 
     def _refresh_region_button_enabled(self) -> None:
         """Region button is enabled iff at least one loaded acquisition has

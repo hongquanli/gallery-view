@@ -133,3 +133,41 @@ def test_switching_back_to_fov_restores_fov_rows(qapp, make_squid_single_tiff_ac
         assert "_" in unit  # composite "<region>_<fov>"
     finally:
         win.close()
+
+
+def test_region_view_enqueues_fov_prereqs_then_stitch(
+    qapp, make_squid_single_tiff_acq, tmp_path, monkeypatch,
+):
+    """Switching to region view should enqueue per-FOV MIP jobs for the
+    selected region, and once all of them land we get a region stitch job.
+    Verify by waiting for region_mip_ready to fire."""
+    import time
+
+    from gallery_view import cache
+    from gallery_view.ui.gallery_window import GalleryWindow
+
+    # Isolate the on-disk cache so test artefacts don't pollute the user's
+    # real ~/.cache/gallery-view/mips dir.
+    monkeypatch.setattr(cache, "CACHE_DIR", str(tmp_path / "mips"))
+
+    folder = make_squid_single_tiff_acq(
+        regions=2, fovs_per_region=2, nz=2, ny=4, nx=4, write_coords=True,
+    )
+    win = GalleryWindow()
+    received: list = []
+    win.loader.region_mip_ready.connect(lambda *args: received.append(args))
+    try:
+        win._add_source(str(folder))
+        win._set_view_mode("region")
+        # Switching modes triggers _rebuild_rows which (in region view)
+        # enqueues prereqs and waits for them; the loader emits region_mip_ready
+        # after stitch completes.
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            QApplication.processEvents()
+            if received:
+                break
+            time.sleep(0.05)
+        assert received, "region_mip_ready never fired"
+    finally:
+        win.close()
