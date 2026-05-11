@@ -56,15 +56,20 @@ def load(
         data = np.load(path)
         if "version" not in data.files or int(data["version"]) != CACHE_VERSION:
             return None, None
+        # Skip missing axes instead of aborting: region mosaics save only the
+        # 'z' axis, while FOV mosaics save all three. The new behaviour is
+        # identical for full FOV caches and unlocks partial region caches.
         out: ChannelMips = {}
         for ax in AXES:
             if f"mip_{ax}" not in data.files:
-                return None, None
+                continue
             out[ax] = AxisMip(
                 mip=np.asarray(data[f"mip_{ax}"]),
                 p1=float(data[f"p1_{ax}"]),
                 p999=float(data[f"p999_{ax}"]),
             )
+        if not out:
+            return None, None
         shape: ShapeZYX | None = None
         if "nz_orig" in data.files:
             shape = (
