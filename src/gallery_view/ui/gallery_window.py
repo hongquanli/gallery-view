@@ -380,6 +380,17 @@ class GalleryWindow(QMainWindow):
         self.expanded_region_mode = checked
         if self.view_mode == "region":
             self._rebuild_rows()
+            # Eagerly enqueue prereqs for any region that's now visible.
+            for acq_id, acq in enumerate(self.acquisitions):
+                if acq is None or len(acq.regions) <= 1:
+                    continue
+                regions_now_visible = (
+                    acq.regions if self.expanded_region_mode else [acq.selected_region]
+                )
+                for region in regions_now_visible:
+                    self._enqueue_region_prereqs(
+                        acq_id, acq, acq.selected_timepoint, region
+                    )
 
     @staticmethod
     def _toggle_style() -> str:
@@ -438,6 +449,15 @@ class GalleryWindow(QMainWindow):
         for acq_id in target.acq_ids:
             self.acquisitions[acq_id] = None  # type: ignore[assignment]
         self.sources.remove(target)
+        removed_ids = set(target.acq_ids)
+        self.region_mip_data = {
+            k: v for k, v in self.region_mip_data.items()
+            if k[0] not in removed_ids
+        }
+        self._region_fov_readiness = {
+            k: v for k, v in self._region_fov_readiness.items()
+            if k[0] not in removed_ids
+        }
         self._sync_sources_panel()
         self._rebuild_mag_filter()
         self._refresh_region_button_enabled()
@@ -879,12 +899,11 @@ class GalleryWindow(QMainWindow):
     ) -> None:
         # Don't support region view for handlers that can't supply coords or
         # a region cache key.
-        try:
-            coords_map = acq.handler._load_coords(acq) if hasattr(
-                acq.handler, "_load_coords"
-            ) else None
-        except AttributeError:
-            coords_map = None
+        coords_map = (
+            acq.handler._load_coords(acq)
+            if hasattr(acq.handler, "_load_coords")
+            else None
+        )
         if not coords_map or region not in coords_map:
             self.status.setText(
                 f"{acq.display_name}: region view needs coordinates.csv"

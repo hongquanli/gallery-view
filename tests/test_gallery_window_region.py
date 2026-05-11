@@ -171,3 +171,27 @@ def test_region_view_enqueues_fov_prereqs_then_stitch(
         assert received, "region_mip_ready never fired"
     finally:
         win.close()
+
+
+def test_remove_source_prunes_region_state(qapp, make_squid_single_tiff_acq):
+    """Removing a source should clear its entries from region_mip_data
+    and _region_fov_readiness so they don't leak across source churn."""
+    from gallery_view.types import AxisMip
+    import numpy as np
+    from gallery_view.ui.gallery_window import GalleryWindow
+
+    folder = make_squid_single_tiff_acq(regions=2, fovs_per_region=1)
+    win = GalleryWindow()
+    try:
+        win._add_source(str(folder))
+        # Seed both region dicts with synthetic entries.
+        win.region_mip_data[(0, "0", "0", 0)] = AxisMip(
+            mip=np.zeros((2, 2), dtype=np.float32), p1=0.0, p999=1.0,
+        )
+        win._region_fov_readiness[(0, "0", "0")] = {(0, "0_0")}
+
+        win._remove_source(str(folder))
+        assert win.region_mip_data == {}
+        assert win._region_fov_readiness == {}
+    finally:
+        win.close()
