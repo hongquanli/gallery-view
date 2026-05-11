@@ -517,7 +517,7 @@ class GalleryWindow(QMainWindow):
                 row_visible.get((acq_id, self.acquisitions[acq_id].selected_timepoint, fov), False)
                 for acq_id in src.acq_ids
                 if self.acquisitions[acq_id] is not None
-                for fov in self._fovs_for_row(acq_id)
+                for fov in self._row_units_for(acq_id)
             )
             self.source_groups[grp_idx].setVisible(any_visible)
 
@@ -541,10 +541,17 @@ class GalleryWindow(QMainWindow):
                 f"{total_visible}/{total_rows} acquisitions visible"
             )
 
-    def _fovs_for_row(self, acq_id: int) -> list[str]:
+    def _row_units_for(self, acq_id: int) -> list[str]:
+        """Return the row-unit ids for this acquisition under the current view.
+
+        FOV view: one or all FOVs (composite ``<region>_<fov>``).
+        Region view: one or all regions.
+        """
         acq = self.acquisitions[acq_id]
         if acq is None:
             return []
+        if self.view_mode == "region":
+            return acq.regions if self.expanded_region_mode else [acq.selected_region]
         return acq.fovs if self.expanded_fov_mode else [acq.selected_fov]
 
     # ── row rendering ──
@@ -607,11 +614,11 @@ class GalleryWindow(QMainWindow):
             if acq is None:
                 continue
             t = acq.selected_timepoint
-            for fov in self._fovs_for_row(acq_id):
-                key = RowKey(acq_id, t, fov)
+            for unit in self._row_units_for(acq_id):
+                key = RowKey(acq_id, t, unit)
                 self.row_keys.append(key)
                 row = self._make_row_widget(key, acq, active_wls)
-                self.row_widgets[(acq_id, t, fov)] = row
+                self.row_widgets[(acq_id, t, unit)] = row
                 group_layout.addWidget(row.container)
 
         return group
@@ -640,6 +647,9 @@ class GalleryWindow(QMainWindow):
         h.setContentsMargins(4, 2, 4, 2)
         h.setSpacing(4)
 
+        unit = key.fov  # in region view, this is the region id
+        is_region_view = self.view_mode == "region"
+
         mag = resolve_mag(acq.folder_name, acq.params) or "?"
         mag_lbl = QLabel(f"{mag}x" if isinstance(mag, int) else str(mag))
         mag_lbl.setFixedWidth(30)
@@ -653,11 +663,15 @@ class GalleryWindow(QMainWindow):
         time_lbl.setStyleSheet("color: #888; font-size: 9px;")
         h.addWidget(time_lbl)
 
-        if self.expanded_fov_mode and len(acq.fovs) > 1:
-            fov_lbl = QLabel(f"FOV {display_fov(key.fov)}")
-            fov_lbl.setFixedWidth(50)
-            fov_lbl.setStyleSheet("color: #888; font-size: 10px;")
-            h.addWidget(fov_lbl)
+        # Per-row unit label (visible in expanded mode for either view).
+        expanded = self.expanded_region_mode if is_region_view else self.expanded_fov_mode
+        nunits = len(acq.regions if is_region_view else acq.fovs)
+        if expanded and nunits > 1:
+            label = f"Region {unit}" if is_region_view else f"FOV {display_fov(unit)}"
+            unit_lbl = QLabel(label)
+            unit_lbl.setFixedWidth(60)
+            unit_lbl.setStyleSheet("color: #888; font-size: 10px;")
+            h.addWidget(unit_lbl)
 
         # Compact name column — analogous to the explorer's "device" column.
         # Multi-line wrap so the layout stays tight; full path in tooltip.
@@ -703,7 +717,7 @@ class GalleryWindow(QMainWindow):
 
         h.addStretch()
 
-        # Time picker (only for multi-timepoint acquisitions)
+        # Time picker (only for multi-timepoint acquisitions; both views use it).
         time_combo: QComboBox | None = None
         if len(acq.timepoints) > 1:
             time_combo = QComboBox()
@@ -717,34 +731,51 @@ class GalleryWindow(QMainWindow):
             )
             h.addWidget(time_combo)
 
-        # FOV picker (default mode only)
-        fov_combo: QComboBox | None = None
-        if not self.expanded_fov_mode and len(acq.fovs) > 1:
-            fov_combo = QComboBox()
-            _style_combo(fov_combo)
-            for fov in acq.fovs:
-                fov_combo.addItem(f"FOV {display_fov(fov)}", fov)
-            _size_combo_to_contents(fov_combo)
-            fov_combo.setCurrentIndex(acq.fovs.index(acq.selected_fov))
-            fov_combo.currentIndexChanged.connect(
-                lambda i, k=key, c=fov_combo: self._on_fov_changed(k, c.itemData(i))
-            )
-            h.addWidget(fov_combo)
+        # Unit picker (FOV combo in FOV view, Region combo in region view).
+        unit_combo: QComboBox | None = None
+        if not expanded:
+            if is_region_view and len(acq.regions) > 1:
+                unit_combo = QComboBox()
+                _style_combo(unit_combo)
+                for r in acq.regions:
+                    unit_combo.addItem(f"Region {r}", r)
+                _size_combo_to_contents(unit_combo)
+                unit_combo.setCurrentIndex(acq.regions.index(acq.selected_region))
+                unit_combo.currentIndexChanged.connect(
+                    lambda i, k=key, c=unit_combo: self._on_region_changed(
+                        k, c.itemData(i)
+                    )
+                )
+                h.addWidget(unit_combo)
+            elif (not is_region_view) and len(acq.fovs) > 1:
+                unit_combo = QComboBox()
+                _style_combo(unit_combo)
+                for fov in acq.fovs:
+                    unit_combo.addItem(f"FOV {display_fov(fov)}", fov)
+                _size_combo_to_contents(unit_combo)
+                unit_combo.setCurrentIndex(acq.fovs.index(acq.selected_fov))
+                unit_combo.currentIndexChanged.connect(
+                    lambda i, k=key, c=unit_combo: self._on_fov_changed(
+                        k, c.itemData(i)
+                    )
+                )
+                h.addWidget(unit_combo)
 
         # Action buttons — vertical stack to match explorer layout.
+        # 'Open 3D View' is suppressed in region view (stitched mosaics are 2D).
         btn_col = QVBoxLayout()
         btn_col.setSpacing(2)
-
-        btn_3d = QPushButton("Open 3D View")
-        btn_3d.setFixedSize(120, 30)
-        btn_3d.setCursor(Qt.PointingHandCursor)
-        btn_3d.setStyleSheet(
-            "QPushButton { background-color: #2d5aa0; color: white; border-radius: 4px;"
-            " font-size: 11px; font-weight: bold; }"
-            "QPushButton:hover { background-color: #3a6fc0; }"
-        )
-        btn_3d.clicked.connect(lambda _, k=key: self._open_napari(k))
-        btn_col.addWidget(btn_3d)
+        if not is_region_view:
+            btn_3d = QPushButton("Open 3D View")
+            btn_3d.setFixedSize(120, 30)
+            btn_3d.setCursor(Qt.PointingHandCursor)
+            btn_3d.setStyleSheet(
+                "QPushButton { background-color: #2d5aa0; color: white; border-radius: 4px;"
+                " font-size: 11px; font-weight: bold; }"
+                "QPushButton:hover { background-color: #3a6fc0; }"
+            )
+            btn_3d.clicked.connect(lambda _, k=key: self._open_napari(k))
+            btn_col.addWidget(btn_3d)
 
         btn_lut = QPushButton("Adjust Contrast")
         btn_lut.setFixedSize(120, 30)
@@ -766,7 +797,7 @@ class GalleryWindow(QMainWindow):
             name_lbl=name_lbl,
             thumb_labels=thumb_labels,
             thumb_columns=thumb_columns,
-            fov_combo=fov_combo,
+            fov_combo=unit_combo,
             time_combo=time_combo,
         )
 
@@ -779,6 +810,23 @@ class GalleryWindow(QMainWindow):
         self._enqueue_jobs_for_acq(
             key.acq_id, acq, acq.selected_timepoint, new_fov
         )
+
+    def _on_region_changed(self, key, new_region: str) -> None:
+        acq = self.acquisitions[key.acq_id]
+        acq.selected_region = new_region
+        self._rebuild_rows()
+        # Region view eagerly enqueues per-FOV MIPs for all FOVs in the
+        # selected region; that path is added in Task 10.
+        if self.view_mode == "region":
+            self._enqueue_region_prereqs(
+                key.acq_id, acq, acq.selected_timepoint, new_region
+            )
+
+    def _enqueue_region_prereqs(
+        self, acq_id: int, acq, timepoint: str, region: str
+    ) -> None:
+        """Wired up in Task 10."""
+        pass
 
     def _on_timepoint_changed(self, key, new_timepoint: str) -> None:
         acq = self.acquisitions[key.acq_id]
