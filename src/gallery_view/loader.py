@@ -7,6 +7,7 @@ completion. Emits ``mip_ready`` per finished channel, ``region_mip_ready``
 per finished region, and ``progress`` after each step.
 """
 
+import itertools
 import queue
 from dataclasses import dataclass
 
@@ -62,7 +63,8 @@ class MipLoader(QThread):
 
     def __init__(self) -> None:
         super().__init__()
-        self._queue: queue.Queue[Job | RegionStitchJob | None] = queue.Queue()
+        self._queue: queue.PriorityQueue = queue.PriorityQueue()
+        self._seq = itertools.count()
         self._done = 0
         self._enqueued = 0
         self._cancelled_acqs: set[int] = set()
@@ -74,12 +76,15 @@ class MipLoader(QThread):
     def enqueue(self, job: Job) -> None:
         self._enqueued += 1
         self._idle_emitted = False
-        self._queue.put(job)
+        self._queue.put((1, next(self._seq), job))
 
     def enqueue_region(self, job: RegionStitchJob) -> None:
         self._enqueued += 1
         self._idle_emitted = False
-        self._queue.put(job)
+        # Priority 0 jumps ahead of FOV jobs so the user sees region thumbs
+        # as soon as each region's FOV MIPs land, instead of waiting for
+        # *all* other regions' FOV MIPs to drain.
+        self._queue.put((0, next(self._seq), job))
 
     def cancel(self, acq_id: int) -> None:
         """Drop pending jobs for this acq. In-flight job runs to completion."""
@@ -87,14 +92,15 @@ class MipLoader(QThread):
 
     def stop(self) -> None:
         self._stop = True
-        self._queue.put(None)  # wake the worker
+        # Priority -1 wakes the worker ahead of any pending jobs.
+        self._queue.put((-1, next(self._seq), None))
 
     # ── thread loop ──
 
     def run(self) -> None:
         while not self._stop:
             try:
-                job = self._queue.get(timeout=0.25)
+                _priority, _seq, job = self._queue.get(timeout=0.25)
             except queue.Empty:
                 if (
                     self._enqueued

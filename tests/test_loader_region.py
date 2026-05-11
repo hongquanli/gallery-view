@@ -135,3 +135,65 @@ def test_region_stitch_job_failure_emits_progress(qapp, make_squid_single_tiff_a
     finally:
         loader.stop()
         loader.wait(2000)
+
+
+def test_region_stitch_job_jumps_ahead_of_pending_fov_jobs(qapp, make_squid_single_tiff_acq):
+    """RegionStitchJob enqueued after several FOV Jobs should still be
+    processed first."""
+    handler, acq = _make_acq(make_squid_single_tiff_acq, regions=1, fovs_per_region=2)
+    # Pre-populate cache so all FOV jobs are no-ops (cache hits) and the
+    # region stitch job can run without waiting on FOV TIFFs.
+    import numpy as np
+    from gallery_view import cache as cache_mod
+    from gallery_view.types import AxisMip
+    for fov in acq.fovs:
+        for channel in acq.channels:
+            src, ch_id = handler.cache_key(acq, fov, channel, timepoint="0")
+            cache_mod.save(src, ch_id, {
+                "z": AxisMip(mip=np.zeros((4, 4), dtype=np.float32), p1=0.0, p999=1.0),
+                "y": AxisMip(mip=np.zeros((2, 4), dtype=np.float32), p1=0.0, p999=1.0),
+                "x": AxisMip(mip=np.zeros((2, 4), dtype=np.float32), p1=0.0, p999=1.0),
+            }, (2, 4, 4))
+    region_src, region_ch_id = handler.cache_key_region(acq, "0", acq.channels[0], timepoint="0")
+    cache_mod.save(region_src, region_ch_id, {
+        "z": AxisMip(mip=np.ones((4, 8), dtype=np.float32), p1=0.0, p999=1.0),
+    })
+
+    fov_progress: list[str] = []
+    region_received: list = []
+    loader = MipLoader()
+    loader.progress.connect(lambda d, q, msg: fov_progress.append(msg))
+    loader.region_mip_ready.connect(lambda *args: region_received.append(args))
+    loader.start()
+    try:
+        # Enqueue 10 FOV jobs first.
+        from gallery_view.loader import Job
+        for fov in acq.fovs * 5:
+            for channel in acq.channels:
+                loader.enqueue(Job(
+                    acq_id=0, acq=acq, fov=fov, channel=channel,
+                    ch_idx=0, timepoint="0",
+                ))
+        # Then enqueue one region stitch.
+        loader.enqueue_region(RegionStitchJob(
+            acq_id=0, acq=acq, region="0",
+            channel=acq.channels[0], ch_idx=0,
+            timepoint="0", fov_mips={}, coords=[],
+        ))
+        assert _run_loader_until(loader, lambda: bool(region_received), timeout=3.0)
+        # The region message should appear before all FOV jobs finish — find the
+        # first "region" mention in progress and verify some FOV jobs are still
+        # un-processed at that point.
+        first_region_idx = next(
+            (i for i, m in enumerate(fov_progress) if "region" in m), -1
+        )
+        assert first_region_idx >= 0, "no region progress message"
+        # In FIFO order the region message would appear at index ~30 (after all
+        # FOV cache-hit messages); with priority it should appear much earlier.
+        assert first_region_idx < 15, (
+            f"region job was index {first_region_idx} of {len(fov_progress)} — "
+            f"priority queue not jumping ahead"
+        )
+    finally:
+        loader.stop()
+        loader.wait(2000)
