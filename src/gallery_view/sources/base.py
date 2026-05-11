@@ -46,6 +46,19 @@ class FormatHandler(Protocol):
         """
         ...
 
+    def cache_key_region(
+        self, acq: Acquisition, region: str, channel: Channel, timepoint: str = "0"
+    ) -> tuple[str, str]:
+        """Return ``(src_path_for_hash, channel_id)`` for the cached stitched
+        region mosaic. Handlers that don't support region view raise
+        ``NotImplementedError``.
+
+        Only ``SingleTiffHandler`` implements this in v1; the UI gates the
+        Region toolbar button on whether at least one source-handler supports
+        it, so callers never reach the raise.
+        """
+        ...
+
     def iter_z_slices(
         self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> Iterator[np.ndarray]:

@@ -115,6 +115,11 @@ class SingleTiffHandler:
     ) -> tuple[str, str]:
         return acq.path, f"fov{fov}/t{timepoint}/{channel.name}"
 
+    def cache_key_region(
+        self, acq: Acquisition, region: str, channel: Channel, timepoint: str = "0"
+    ) -> tuple[str, str]:
+        return acq.path, f"region:{region}/t{timepoint}/{channel.name}"
+
     def _load_coords(self, acq: Acquisition) -> dict[str, list[FovCoord]] | None:
         """Parse coordinates.csv into acq.extra['coords_by_region'].
 

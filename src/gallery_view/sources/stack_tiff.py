@@ -115,6 +115,13 @@ class StackTiffHandler:
     ) -> tuple[str, str]:
         return acq.path, f"fov{fov}/t{timepoint}/wl_{channel.wavelength}"
 
+    def cache_key_region(
+        self, acq: Acquisition, region: str, channel: Channel, timepoint: str = "0"
+    ) -> tuple[str, str]:
+        raise NotImplementedError(
+            "StackTiffHandler does not support region view"
+        )
+
     def iter_z_slices(
         self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> Iterator[np.ndarray]:

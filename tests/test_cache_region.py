@@ -56,3 +56,45 @@ def test_region_and_fov_cache_keys_dont_collide(make_squid_single_tiff_acq):
     fov_path = cache._cache_path("/src/acq", "fov0_0/t0/ch")
     region_path = cache._cache_path("/src/acq", "region:0/t0/ch")
     assert fov_path != region_path
+
+
+def test_single_tiff_cache_key_region(make_squid_single_tiff_acq):
+    """SingleTiffHandler.cache_key_region produces a region: prefix key
+    that differs by region, timepoint, and channel."""
+    from gallery_view.sources.single_tiff import SingleTiffHandler
+
+    folder = make_squid_single_tiff_acq(regions=2, fovs_per_region=2, nt=2)
+    handler = SingleTiffHandler()
+    acq = handler.build(
+        str(folder), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5}
+    )
+    src_a, id_a = handler.cache_key_region(acq, "0", acq.channels[0], timepoint="0")
+    src_b, id_b = handler.cache_key_region(acq, "1", acq.channels[0], timepoint="0")
+    src_c, id_c = handler.cache_key_region(acq, "0", acq.channels[0], timepoint="1")
+    src_d, id_d = handler.cache_key_region(acq, "0", acq.channels[1], timepoint="0")
+    assert src_a == src_b == src_c == src_d == acq.path
+    assert id_a.startswith("region:0/")
+    assert id_b.startswith("region:1/")
+    assert id_a != id_b != id_c != id_d
+
+
+def test_ome_tiff_cache_key_region_not_implemented(make_ome_tiff_acq):
+    from gallery_view.sources.ome_tiff import OmeTiffHandler
+
+    handler = OmeTiffHandler()
+    acq = handler.build(
+        str(make_ome_tiff_acq()), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5}
+    )
+    with pytest.raises(NotImplementedError):
+        handler.cache_key_region(acq, "0", acq.channels[0])
+
+
+def test_stack_tiff_cache_key_region_not_implemented(make_stack_tiff_acq):
+    from gallery_view.sources.stack_tiff import StackTiffHandler
+
+    handler = StackTiffHandler()
+    acq = handler.build(
+        str(make_stack_tiff_acq()), {"dz(um)": 2.0, "sensor_pixel_size_um": 6.5}
+    )
+    with pytest.raises(NotImplementedError):
+        handler.cache_key_region(acq, "current", acq.channels[0])
