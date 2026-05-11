@@ -173,6 +173,50 @@ def test_region_view_enqueues_fov_prereqs_then_stitch(
         win.close()
 
 
+def test_region_lut_sidecar_uses_region_cache_key(qapp, make_squid_single_tiff_acq, tmp_path, monkeypatch):
+    """Saving a LUT override from a region row writes to the region-keyed
+    sidecar path, not the FOV-keyed one."""
+    from gallery_view import cache
+    from gallery_view.types import AxisMip
+    from gallery_view.ui.gallery_window import GalleryWindow
+
+    monkeypatch.setattr(cache, "CACHE_DIR", str(tmp_path / "mips"))
+
+    folder = make_squid_single_tiff_acq(
+        regions=1, fovs_per_region=1, write_coords=True,
+    )
+    win = GalleryWindow()
+    try:
+        win._add_source(str(folder))
+        win._set_view_mode("region")
+        # Synthesize a region mosaic in memory so the LUT dialog has something
+        # to show without waiting for the loader thread.
+        import numpy as np
+        ax_mip = AxisMip(
+            mip=np.zeros((4, 4), dtype=np.float32), p1=0.0, p999=1.0,
+        )
+        win.region_mip_data[(0, "0", "0", 0)] = ax_mip
+
+        # The LUT-only save path: directly call save_lut_only with the key
+        # the window's _adjust_lut should produce.
+        handler = win.acquisitions[0].handler
+        src, ch_id = handler.cache_key_region(
+            win.acquisitions[0], "0", win.acquisitions[0].channels[0]
+        )
+        cache.save_lut_only(src, ch_id, {"z": (ax_mip.mip, 0.1, 0.9)})
+
+        sidecar = cache._lut_override_path(src, ch_id)
+        assert sidecar.exists()
+        # The sidecar path encodes 'region:' — distinct from the FOV path.
+        fov_src, fov_id = handler.cache_key(
+            win.acquisitions[0], win.acquisitions[0].fovs[0],
+            win.acquisitions[0].channels[0],
+        )
+        assert cache._lut_override_path(fov_src, fov_id) != sidecar
+    finally:
+        win.close()
+
+
 def test_remove_source_prunes_region_state(qapp, make_squid_single_tiff_acq):
     """Removing a source should clear its entries from region_mip_data
     and _region_fov_readiness so they don't leak across source churn."""

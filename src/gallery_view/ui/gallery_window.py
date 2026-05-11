@@ -1182,20 +1182,42 @@ class GalleryWindow(QMainWindow):
         from .lut_dialog import show_lut_dialog
 
         acq = self.acquisitions[key.acq_id]
+        is_region = self.view_mode == "region"
 
-        def refresh(acq_id, timepoint, fov, ch_idx, ax_mip):
-            self._render_thumb(acq_id, timepoint, fov, ch_idx, ax_mip)
+        if is_region:
+            mip_data = {
+                (a, t, u, ci, "z"): ax_mip
+                for (a, t, u, ci), ax_mip in self.region_mip_data.items()
+            }
+            key_fn = lambda a, u, c, t: a.handler.cache_key_region(
+                a, u, c, timepoint=t
+            )
+            unit_label = "Region"
+            refresh = self._render_region_thumb
+        else:
+            mip_data = self.mip_data
+            key_fn = None
+            unit_label = "FOV"
+            refresh = self._render_thumb
 
         show_lut_dialog(
             parent=self,
             acq=acq,
-            fov=key.fov,
+            unit=key.fov,
             timepoint=key.timepoint,
             axis=self.view_axis,
-            mip_data=self.mip_data,
+            mip_data=mip_data,
             refresh_thumb=refresh,
             acq_id=key.acq_id,
+            key_fn=key_fn,
+            unit_label=unit_label,
         )
+
+        # In region view, mip_data was a local copy; push p1/p999 changes
+        # back to self.region_mip_data so the next thumb render picks them up.
+        if is_region:
+            for (a, t, u, ci, _), ax_mip in mip_data.items():
+                self.region_mip_data[(a, t, u, ci)] = ax_mip
 
     # ── shutdown ──
 
