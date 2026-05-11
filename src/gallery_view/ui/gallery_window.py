@@ -841,7 +841,7 @@ class GalleryWindow(QMainWindow):
         acq.selected_region = new_region
         self._rebuild_rows()
         # Region view eagerly enqueues per-FOV MIPs for all FOVs in the
-        # selected region; that path is added in Task 10.
+        # selected region; readiness is tracked in _region_fov_readiness.
         if self.view_mode == "region":
             self._enqueue_region_prereqs(
                 key.acq_id, acq, acq.selected_timepoint, new_region
@@ -940,12 +940,20 @@ class GalleryWindow(QMainWindow):
     def _on_timepoint_changed(self, key, new_timepoint: str) -> None:
         acq = self.acquisitions[key.acq_id]
         acq.selected_timepoint = new_timepoint
-        # Re-key the row widget; rows are cheap, rebuild.
         self._rebuild_rows()
-        # Enqueue jobs for the new (timepoint, fov)'s channels.
-        self._enqueue_jobs_for_acq(
-            key.acq_id, acq, new_timepoint, acq.selected_fov
-        )
+        if self.view_mode == "region":
+            regions_to_load = (
+                acq.regions if self.expanded_region_mode
+                else [acq.selected_region]
+            )
+            for region in regions_to_load:
+                self._enqueue_region_prereqs(
+                    key.acq_id, acq, new_timepoint, region
+                )
+        else:
+            self._enqueue_jobs_for_acq(
+                key.acq_id, acq, new_timepoint, acq.selected_fov
+            )
 
     # ── physical aspect and label sizing ──
 

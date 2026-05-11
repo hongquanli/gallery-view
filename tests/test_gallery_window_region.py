@@ -278,6 +278,49 @@ def test_adjust_lut_in_region_view_uses_cache_key_region(qapp, make_squid_single
         win.close()
 
 
+def test_timepoint_change_in_region_view_enqueues_prereqs(
+    qapp, make_squid_single_tiff_acq
+):
+    """Changing timepoint in region view should re-trigger prereq enqueue
+    so the new timepoint's stitches actually fire."""
+    import time
+
+    from gallery_view.ui.gallery_window import GalleryWindow, RowKey
+
+    folder = make_squid_single_tiff_acq(
+        regions=2, fovs_per_region=2, nt=2,
+        nz=2, ny=4, nx=4, write_coords=True,
+    )
+    win = GalleryWindow()
+    received: list = []
+    win.loader.region_mip_ready.connect(lambda *args: received.append(args))
+    try:
+        win._add_source(str(folder))
+        win._set_view_mode("region")
+        # Wait for t=0 stitches to land.
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            QApplication.processEvents()
+            if any(args[1] == "0" for args in received):
+                break
+            time.sleep(0.05)
+        assert any(args[1] == "0" for args in received), "t=0 never stitched"
+
+        # Switch to t=1 and confirm a new stitch fires for that timepoint.
+        received.clear()
+        key = next(iter(win.row_widgets))
+        win._on_timepoint_changed(RowKey(*key), "1")
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            QApplication.processEvents()
+            if any(args[1] == "1" for args in received):
+                break
+            time.sleep(0.05)
+        assert any(args[1] == "1" for args in received), "t=1 never stitched"
+    finally:
+        win.close()
+
+
 def test_status_text_reports_regions_in_region_mode(qapp, make_squid_single_tiff_acq):
     from gallery_view.ui.gallery_window import GalleryWindow
     win = GalleryWindow()
