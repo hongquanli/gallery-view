@@ -5,7 +5,6 @@ exact pixel layout, mean-blending, gap handling, and downsample math.
 """
 
 import numpy as np
-import pytest
 
 from gallery_view.stitch import FovCoord, stitch_region
 
@@ -18,8 +17,8 @@ def test_empty_input_returns_none():
     assert stitch_region({}, [], pixel_um=1.0) is None
 
 
-def test_single_fov_returns_a_padded_version_of_it():
-    """One FOV at the origin: mosaic equals that FOV (possibly downsampled).
+def test_single_fov_unchanged_at_factor_one():
+    """One FOV at the origin with no downsample: mosaic equals that FOV exactly.
 
     With nx=ny=4 and target_longest_px=1024, factor=1 so no downsampling."""
     mip = np.arange(16, dtype=np.float32).reshape(4, 4)
@@ -176,3 +175,36 @@ def test_percentiles_ignore_black_gaps():
     # p1 should reflect the covered pixels' percentile (all 100s), not 0.
     assert result.p1 == 100.0
     assert result.p999 == 100.0
+
+
+def test_factor_larger_than_tile_size_does_not_crash():
+    """When target_longest_px forces factor > min(ny, nx), the stitcher
+    should fall back to averaging the whole tile, not crash in reshape."""
+    # Two 4x4 tiles tiled into an 80x80 canvas (large enough that
+    # target_longest_px=4 forces factor=20 > 4).
+    a = _flat(10.0, 4, 4)
+    b = _flat(20.0, 4, 4)
+    coords = [
+        FovCoord("0_0", x_mm=0.0, y_mm=0.0),
+        FovCoord("0_1", x_mm=76e-3, y_mm=0.0),  # 76 um apart so canvas is wide
+    ]
+    result = stitch_region(
+        {"0_0": a, "0_1": b}, coords,
+        pixel_um=1.0, target_longest_px=4,
+    )
+    assert result is not None
+    # Each tile averaged to 1px; canvas downsampled to ~4 px wide.
+    assert result.mip.shape[0] >= 1
+    assert result.mip.shape[1] >= 1
+    # Both averaged values should appear somewhere in the mosaic.
+    flat = set(result.mip.flatten().tolist())
+    assert 10.0 in flat or any(abs(v - 10.0) < 1e-6 for v in flat)
+    assert 20.0 in flat or any(abs(v - 20.0) < 1e-6 for v in flat)
+
+
+def test_zero_pixel_um_returns_none():
+    """pixel_um <= 0 is invalid; return None instead of dividing by zero."""
+    a = _flat(1.0)
+    coords = [FovCoord("0_0", x_mm=0.0, y_mm=0.0)]
+    assert stitch_region({"0_0": a}, coords, pixel_um=0.0) is None
+    assert stitch_region({"0_0": a}, coords, pixel_um=-1.0) is None

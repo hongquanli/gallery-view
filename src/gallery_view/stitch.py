@@ -35,6 +35,9 @@ def stitch_region(
     if not fov_mips:
         return None
 
+    if pixel_um <= 0:
+        return None
+
     # Shape uniformity check — region view doesn't support heterogeneous FOVs.
     shapes = {arr.shape for arr in fov_mips.values()}
     if len(shapes) != 1:
@@ -69,11 +72,8 @@ def stitch_region(
 
     # Integer downsample factor so the longest axis fits target_longest_px.
     factor = max(1, math.ceil(max(H_full, W_full) / max(target_longest_px, 1)))
-    # Tile size after downsample (truncate to multiples of factor).
-    ny_ds = max(1, ny // factor)
-    nx_ds = max(1, nx // factor)
-    H = max(ny_ds, H_full // factor)
-    W = max(nx_ds, W_full // factor)
+    H = max(1, H_full // factor)
+    W = max(1, W_full // factor)
 
     accum = np.zeros((H, W), dtype=np.float32)
     weight = np.zeros((H, W), dtype=np.float32)
@@ -82,14 +82,25 @@ def stitch_region(
         if c.fov not in fov_mips:
             continue
         tile = fov_mips[c.fov]
-        # Block-mean downsample (truncate to multiples of factor).
-        ny_use, nx_use = ny_ds * factor, nx_ds * factor
-        tile_ds = (
-            tile[:ny_use, :nx_use]
-            .reshape(ny_ds, factor, nx_ds, factor)
-            .mean(axis=(1, 3))
-            .astype(np.float32)
-        )
+        # Block-mean downsample, truncating to multiples of factor. When
+        # factor > ny or factor > nx (very aggressive downsample relative
+        # to FOV size), fall back to averaging the whole tile down to 1 px
+        # along that axis — keeps placement correct without crashing in
+        # reshape.
+        ny_use = (ny // factor) * factor
+        nx_use = (nx // factor) * factor
+        if ny_use == 0 or nx_use == 0:
+            tile_ds = np.array([[tile.mean()]], dtype=np.float32)
+            tile_ny_ds, tile_nx_ds = 1, 1
+        else:
+            tile_ny_ds = ny_use // factor
+            tile_nx_ds = nx_use // factor
+            tile_ds = (
+                tile[:ny_use, :nx_use]
+                .reshape(tile_ny_ds, factor, tile_nx_ds, factor)
+                .mean(axis=(1, 3))
+                .astype(np.float32)
+            )
 
         col = (col_px - min_col) // factor
         if flip_y:
@@ -99,11 +110,11 @@ def stitch_region(
         else:
             row = (row_px - min_row) // factor
 
-        row = max(0, min(H - ny_ds, row))
-        col = max(0, min(W - nx_ds, col))
+        row = max(0, min(H - tile_ny_ds, row))
+        col = max(0, min(W - tile_nx_ds, col))
 
-        accum[row:row + ny_ds, col:col + nx_ds] += tile_ds
-        weight[row:row + ny_ds, col:col + nx_ds] += 1.0
+        accum[row:row + tile_ny_ds, col:col + tile_nx_ds] += tile_ds
+        weight[row:row + tile_ny_ds, col:col + tile_nx_ds] += 1.0
 
     mosaic = accum / np.maximum(weight, 1.0)
     covered = weight > 0
