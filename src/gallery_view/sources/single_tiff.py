@@ -259,24 +259,14 @@ class SingleTiffHandler:
     @staticmethod
     def _regions_from_fovs(fovs: list[str]) -> list[str]:
         """Distinct region prefixes from composite '<region>_<fov>' strings,
-        sorted: numeric regions as ints, alphanumeric (well names) using a
-        digit-aware key so 'A2' precedes 'A10'."""
-        seen: set[str] = set()
+        preserving the order established by ``_fovs_for`` (single source of
+        truth — keeps regions and fovs from drifting apart on plates with
+        well-name regions like A1, A2, ...)."""
+        seen: dict[str, None] = {}   # dict for insertion-ordered dedup
         for fov in fovs:
             region = fov.split("_", 1)[0] if "_" in fov else "0"
-            seen.add(region)
-
-        def sort_key(r: str) -> tuple:
-            # Numeric regions sort first as ints; alphanumeric follow with a
-            # (alpha_prefix, int_suffix) decomposition for natural ordering.
-            if r.isdigit():
-                return (0, int(r), "")
-            m = re.match(r"^([A-Za-z]+)(\d+)$", r)
-            if m:
-                return (1, int(m.group(2)), m.group(1))
-            return (2, 0, r)
-
-        return sorted(seen, key=sort_key)
+            seen[region] = None
+        return list(seen)
 
     @staticmethod
     def _channels_from_filenames(
