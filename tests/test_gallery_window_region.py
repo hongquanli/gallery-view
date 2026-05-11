@@ -276,3 +276,18 @@ def test_adjust_lut_in_region_view_uses_cache_key_region(qapp, make_squid_single
         assert ch_id.startswith("region:0/")
     finally:
         win.close()
+
+
+def test_status_text_reports_regions_in_region_mode(qapp, make_squid_single_tiff_acq):
+    from gallery_view.ui.gallery_window import GalleryWindow
+    win = GalleryWindow()
+    try:
+        folder = make_squid_single_tiff_acq(regions=2, fovs_per_region=2)
+        win._add_source(str(folder))
+        win._set_view_mode("region")
+        win.expand_region_action.setChecked(True)  # 2 region rows
+        win._refresh_visibility()
+        text = win.status.text()
+        assert "region" in text.lower(), f"status was {text!r}"
+    finally:
+        win.close()

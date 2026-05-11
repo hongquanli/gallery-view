@@ -548,6 +548,9 @@ class GalleryWindow(QMainWindow):
         # rows reappear, replace the "all hidden" message rather than leave
         # it stale on the status bar.
         total_rows = len(self.row_widgets)
+        unit_label = "regions" if self.view_mode == "region" else (
+            "FOVs" if self.expanded_fov_mode else "acquisitions"
+        )
         if total_rows and total_visible == 0:
             reasons = []
             if hide_thin:
@@ -556,11 +559,11 @@ class GalleryWindow(QMainWindow):
                 reasons.append("no magnification selected")
             why = " and ".join(reasons) if reasons else "filters"
             self.status.setText(
-                f"All {total_rows} rows hidden by {why}."
+                f"All {total_rows} {unit_label} hidden by {why}."
             )
         elif total_rows:
             self.status.setText(
-                f"{total_visible}/{total_rows} acquisitions visible"
+                f"{total_visible}/{total_rows} {unit_label} visible"
             )
 
     def _row_units_for(self, acq_id: int) -> list[str]:
