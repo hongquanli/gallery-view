@@ -21,7 +21,7 @@ from qtpy.QtWidgets import (
 )
 
 from .. import scan
-from ..loader import Job, MipLoader
+from ..loader import Job, MipLoader, RegionStitchJob
 from ..mips import mip_to_rgba
 from ..sources._squid_common import display_fov, parse_timestamp, resolve_mag
 from ..types import Acquisition, AxisMip
@@ -129,6 +129,15 @@ class GalleryWindow(QMainWindow):
         self.square_footprint: bool = False
         # (acq_id, timepoint, fov, ch_idx, axis) -> AxisMip
         self.mip_data: dict[tuple[int, str, str, int, str], "AxisMip"] = {}
+        self.view_mode: str = "fov"  # "fov" | "region"
+        self.expanded_region_mode: bool = False
+        # (acq_id, timepoint, region, ch_idx) -> AxisMip for stitched mosaics
+        self.region_mip_data: dict[tuple[int, str, str, int], AxisMip] = {}
+        # (acq_id, timepoint, region) -> set of (ch_idx, fov_id) we've seen,
+        # used to detect "all FOV MIPs ready, time to stitch".
+        self._region_fov_readiness: dict[
+            tuple[int, str, str], set[tuple[int, str]]
+        ] = {}
 
         # Loader thread (long-lived)
         self.loader = MipLoader()
@@ -231,6 +240,32 @@ class GalleryWindow(QMainWindow):
         self.view_axis: str = "z"
 
         row.addSpacing(16)
+        view_lbl = QLabel("View:")
+        view_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        row.addWidget(view_lbl)
+
+        self.view_btn_group = QButtonGroup(self)
+        self.view_btn_group.setExclusive(True)
+        self.view_buttons: dict[str, QPushButton] = {}
+        for mode, label in [("fov", "FOV"), ("region", "Region")]:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setFixedSize(54, 22)
+            btn.setStyleSheet(self._toggle_style())
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setChecked(mode == "fov")
+            btn.clicked.connect(lambda _, m=mode: self._set_view_mode(m))
+            self.view_btn_group.addButton(btn)
+            self.view_buttons[mode] = btn
+            row.addWidget(btn)
+        # Region button starts disabled; _refresh_region_button_enabled enables
+        # it once a source with multi-region data is added.
+        self.view_buttons["region"].setEnabled(False)
+        self.view_buttons["region"].setToolTip(
+            "No source supports region view"
+        )
+
+        row.addSpacing(16)
         size_lbl = QLabel("Thumbnail size:")
         size_lbl.setStyleSheet("color: #888; font-size: 11px;")
         row.addWidget(size_lbl)
@@ -287,6 +322,13 @@ class GalleryWindow(QMainWindow):
         self.expand_action.toggled.connect(self._set_expanded_fov_mode)
         settings_menu.addAction(self.expand_action)
 
+        self.expand_region_action = QAction(
+            "Expand all regions as separate rows", self
+        )
+        self.expand_region_action.setCheckable(True)
+        self.expand_region_action.toggled.connect(self._set_expanded_region_mode)
+        settings_menu.addAction(self.expand_region_action)
+
         settings_menu.addSeparator()
         clear_action = QAction("Clear MIP cache…", self)
         clear_action.triggered.connect(self._on_clear_cache)
@@ -332,6 +374,11 @@ class GalleryWindow(QMainWindow):
         self.expanded_fov_mode = checked
         self._rebuild_rows()
 
+    def _set_expanded_region_mode(self, checked: bool) -> None:
+        self.expanded_region_mode = checked
+        if self.view_mode == "region":
+            self._rebuild_rows()
+
     @staticmethod
     def _toggle_style() -> str:
         return (
@@ -373,6 +420,7 @@ class GalleryWindow(QMainWindow):
         self.sources_panel.show()
         self._sync_sources_panel()
         self._rebuild_mag_filter()
+        self._refresh_region_button_enabled()
         self._rebuild_rows()
         for acq_id, acq in zip(ids, new_acqs):
             self._enqueue_jobs_for_acq(
@@ -390,6 +438,7 @@ class GalleryWindow(QMainWindow):
         self.sources.remove(target)
         self._sync_sources_panel()
         self._rebuild_mag_filter()
+        self._refresh_region_button_enabled()
         self._rebuild_rows()
         if not self.sources:
             self.empty_overlay.show()
@@ -858,6 +907,41 @@ class GalleryWindow(QMainWindow):
             if ax != axis:
                 continue
             self._render_thumb(acq_id, t, fov, ch_idx, ax_mip)
+
+    def _set_view_mode(self, mode: str) -> None:
+        if mode == self.view_mode:
+            return
+        self.view_mode = mode
+        # XZ/YZ stitched MIPs aren't supported; force XY in region view.
+        if mode == "region":
+            if self.view_axis != "z":
+                self.view_axis = "z"
+                self.axis_buttons["z"].setChecked(True)
+            self.axis_buttons["y"].setEnabled(False)
+            self.axis_buttons["x"].setEnabled(False)
+        else:
+            self.axis_buttons["y"].setEnabled(True)
+            self.axis_buttons["x"].setEnabled(True)
+        self._rebuild_rows()
+
+    def _refresh_region_button_enabled(self) -> None:
+        """Region button is enabled iff at least one loaded acquisition has
+        more than one region."""
+        any_multi_region = any(
+            acq is not None and len(acq.regions) > 1
+            for acq in self.acquisitions
+        )
+        self.view_buttons["region"].setEnabled(any_multi_region)
+        if any_multi_region:
+            self.view_buttons["region"].setToolTip("")
+        else:
+            self.view_buttons["region"].setToolTip(
+                "No source supports region view"
+            )
+            if self.view_mode == "region":
+                # Source removed; fall back to FOV view.
+                self.view_buttons["fov"].setChecked(True)
+                self._set_view_mode("fov")
 
     def _set_thumb_size(self, size: int) -> None:
         self.thumb_size = size
