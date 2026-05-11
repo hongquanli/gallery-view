@@ -91,7 +91,7 @@ def test_region_view_compact_renders_one_row_per_acq_with_region_combo(
         acq_id, t, unit = key
         rw = win.row_widgets[key]
         # Region combo is shown when multi-region; FOV combo is hidden.
-        assert rw.fov_combo is not None  # repurposed for region in region view
+        assert rw.unit_combo is not None  # repurposed for region in region view
         # Open 3D View is not rendered in region rows.
         from qtpy.QtWidgets import QPushButton
         buttons = rw.container.findChildren(QPushButton)

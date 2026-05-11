@@ -84,7 +84,8 @@ class Source:
 
 @dataclass
 class RowKey:
-    """A row in the gallery: (acq_id, timepoint, fov)."""
+    """A row in the gallery: ``(acq_id, timepoint, unit)`` — ``unit`` is a
+    composite ``<region>_<fov>`` in FOV view and a region id in region view."""
     acq_id: int
     timepoint: str
     fov: str
@@ -98,7 +99,7 @@ class RowWidgets:
     name_lbl: "QLabel"
     thumb_labels: "dict[int, QLabel]"   # ch_idx -> data thumb
     thumb_columns: "dict[str, QLabel]"  # wavelength -> the cell currently rendered (data or placeholder)
-    fov_combo: "QComboBox | None"
+    unit_combo: "QComboBox | None"
     time_combo: "QComboBox | None"
 
 
@@ -514,10 +515,10 @@ class GalleryWindow(QMainWindow):
             if grp_idx >= len(self.source_groups):
                 continue
             any_visible = any(
-                row_visible.get((acq_id, self.acquisitions[acq_id].selected_timepoint, fov), False)
+                row_visible.get((acq_id, self.acquisitions[acq_id].selected_timepoint, unit), False)
                 for acq_id in src.acq_ids
                 if self.acquisitions[acq_id] is not None
-                for fov in self._row_units_for(acq_id)
+                for unit in self._row_units_for(acq_id)
             )
             self.source_groups[grp_idx].setVisible(any_visible)
 
@@ -797,7 +798,7 @@ class GalleryWindow(QMainWindow):
             name_lbl=name_lbl,
             thumb_labels=thumb_labels,
             thumb_columns=thumb_columns,
-            fov_combo=unit_combo,
+            unit_combo=unit_combo,
             time_combo=time_combo,
         )
 
