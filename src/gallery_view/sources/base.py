@@ -59,6 +59,16 @@ class FormatHandler(Protocol):
         """
         ...
 
+    def load_region_coords(
+        self, acq: Acquisition
+    ) -> "dict[str, list] | None":
+        """Return per-region stage coordinates for region-view stitching.
+
+        Returns the parsed mapping (keyed by region id) or ``None`` when the
+        handler doesn't support region view or coordinates aren't available.
+        """
+        ...
+
     def iter_z_slices(
         self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> Iterator[np.ndarray]:

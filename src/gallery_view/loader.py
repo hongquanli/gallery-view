@@ -20,12 +20,9 @@ from .types import Acquisition, AxisMip, Channel, ChannelMips, ShapeZYX
 
 
 def _pixel_um_for(acq: Acquisition) -> float:
-    """In-plane pixel size in micrometres. Mirrors GalleryWindow's logic."""
-    from .sources._squid_common import resolve_mag
-
-    sensor = acq.params.get("sensor_pixel_size_um", 6.5)
-    mag = resolve_mag(acq.folder_name, acq.params) or 1
-    return sensor / max(mag, 1)
+    """In-plane pixel size in micrometres. Delegates to the shared helper."""
+    from .sources._squid_common import pixel_um_for
+    return pixel_um_for(acq.folder_name, acq.params)
 
 
 @dataclass

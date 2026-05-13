@@ -23,7 +23,7 @@ from qtpy.QtWidgets import (
 from .. import scan
 from ..loader import Job, MipLoader, RegionStitchJob
 from ..mips import mip_to_rgba
-from ..sources._squid_common import display_fov, parse_timestamp, resolve_mag
+from ..sources._squid_common import display_fov, parse_timestamp, pixel_um_for, resolve_mag
 from ..types import Acquisition, AxisMip
 from .colors import CHANNEL_ORDER, rgb_for
 
@@ -871,11 +871,8 @@ class GalleryWindow(QMainWindow):
         # Track what's already in mip_data so the stitch trigger doesn't wait
         # for jobs that already completed before we switched modes.
         already = {
-            (ci, f)
-            for (a, t, f, ci, ax) in self.mip_data
-            if a == acq_id and t == timepoint and ax == "z" and (
-                ci, f
-            ) in needed
+            (ci, f) for (ci, f) in needed
+            if (acq_id, timepoint, f, ci, "z") in self.mip_data
         }
         self._region_fov_readiness[key] -= already
 
@@ -891,35 +888,40 @@ class GalleryWindow(QMainWindow):
 
         # If all FOV MIPs were already in memory, fire stitches immediately.
         if not self._region_fov_readiness[key]:
+            by_ch = self._collect_fov_mips_by_channel(acq_id, timepoint, region)
+            coords_map = acq.handler.load_region_coords(acq)
+            coords = (coords_map or {}).get(region, [])
             for ch_idx, channel in enumerate(acq.channels):
                 self._dispatch_region_stitch(
-                    acq_id, acq, timepoint, region, ch_idx, channel
+                    acq_id, acq, timepoint, region, ch_idx, channel,
+                    fov_mips=by_ch.get(ch_idx, {}), coords=coords,
                 )
+
+    def _collect_fov_mips_by_channel(
+        self, acq_id: int, timepoint: str, region: str,
+    ) -> "dict[int, dict[str, object]]":
+        """One pass over mip_data: gather every (ch_idx -> fov -> MIP) for the
+        given region's FOVs. Returned dict's outer key is ch_idx."""
+        out: dict[int, dict] = {}
+        for (a, t, f, ci, ax), entry in self.mip_data.items():
+            if (a, t, ax) != (acq_id, timepoint, "z"):
+                continue
+            if f.split("_", 1)[0] != region:
+                continue
+            out.setdefault(ci, {})[f] = entry.mip
+        return out
 
     def _dispatch_region_stitch(
         self, acq_id: int, acq, timepoint: str, region: str,
         ch_idx: int, channel,
+        fov_mips: "dict[str, object]",
+        coords: list,
     ) -> None:
-        # Don't support region view for handlers that can't supply coords or
-        # a region cache key.
-        coords_map = (
-            acq.handler._load_coords(acq)
-            if hasattr(acq.handler, "_load_coords")
-            else None
-        )
-        if not coords_map or region not in coords_map:
+        if not coords:
             self.status.setText(
                 f"{acq.display_name}: region view needs coordinates.csv"
             )
             return
-        coords = coords_map[region]
-
-        fov_mips = {
-            f: self.mip_data[(a, t, f, ci, ax)].mip
-            for (a, t, f, ci, ax) in list(self.mip_data)
-            if a == acq_id and t == timepoint and ci == ch_idx and ax == "z"
-            and f.split("_", 1)[0] == region
-        }
         if not fov_mips:
             return
         self.loader.enqueue_region(RegionStitchJob(
@@ -962,9 +964,7 @@ class GalleryWindow(QMainWindow):
         acq = self.acquisitions[acq_id]
         if acq is None:
             return 1.0
-        sensor_pixel_um = acq.params.get("sensor_pixel_size_um", 6.5)
-        mag = resolve_mag(acq.folder_name, acq.params) or 1
-        pixel_um = sensor_pixel_um / mag if mag else sensor_pixel_um
+        pixel_um = pixel_um_for(acq.folder_name, acq.params)
         dz_um = acq.params.get("dz(um)", pixel_um)
         shape = acq.shape_zyx
         if shape is None:
@@ -984,20 +984,20 @@ class GalleryWindow(QMainWindow):
         aspect = self._phys_aspect(acq_id, fov, self.view_axis)
         return self.thumb_size, max(20, int(round(self.thumb_size * aspect)))
 
-    def _image_render_size(
-        self, acq_id, fov, cell_w: int, cell_h: int
-    ) -> tuple[int, int]:
-        """Pixmap size that fits in the cell while preserving physical aspect.
-
-        In non-square mode the cell already matches physical aspect so this
-        returns ``(cell_w, cell_h)``. In square_footprint mode it returns a
-        letterboxed size; the QLabel's center alignment fills the rest.
-        """
-        aspect = self._phys_aspect(acq_id, fov, self.view_axis)
+    @staticmethod
+    def _letterbox(aspect: float, cell_w: int, cell_h: int) -> tuple[int, int]:
+        """Fit an image of given aspect (height/width) inside a cell while
+        preserving aspect. Returns ``(img_w, img_h)``."""
         cell_aspect = cell_h / max(cell_w, 1)
         if cell_aspect >= aspect:
             return cell_w, max(1, int(round(cell_w * aspect)))
         return max(1, int(round(cell_h / max(aspect, 1e-9)))), cell_h
+
+    def _image_render_size(
+        self, acq_id, fov, cell_w: int, cell_h: int
+    ) -> tuple[int, int]:
+        """Pixmap size that fits in the cell while preserving physical aspect."""
+        return self._letterbox(self._phys_aspect(acq_id, fov, self.view_axis), cell_w, cell_h)
 
     def _apply_label_sizes(self) -> None:
         for (acq_id, timepoint, fov), rw in self.row_widgets.items():
@@ -1046,12 +1046,7 @@ class GalleryWindow(QMainWindow):
         qimg = QImage(rgba.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
         # Region thumbs scale to fit the cell, preserving the mosaic aspect.
         cell = self.thumb_size
-        cell_aspect = 1.0
-        aspect = h / max(w, 1)
-        if aspect >= cell_aspect:
-            img_w, img_h = max(1, int(round(cell / max(aspect, 1e-9)))), cell
-        else:
-            img_w, img_h = cell, max(1, int(round(cell * aspect)))
+        img_w, img_h = self._letterbox(h / max(w, 1), cell, cell)
         pixmap = QPixmap.fromImage(qimg).scaled(
             img_w, img_h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation
         )
@@ -1091,11 +1086,14 @@ class GalleryWindow(QMainWindow):
                 pending.discard((ch_idx, fov))
                 if not pending:
                     # All FOV MIPs for this region are in — stitch every channel.
+                    by_ch = self._collect_fov_mips_by_channel(acq_id, timepoint, region)
+                    coords_map = acq.handler.load_region_coords(acq)
+                    coords = (coords_map or {}).get(region, [])
                     for ci, channel in enumerate(acq.channels):
                         self._dispatch_region_stitch(
-                            acq_id, acq, timepoint, region, ci, channel
+                            acq_id, acq, timepoint, region, ci, channel,
+                            fov_mips=by_ch.get(ci, {}), coords=coords,
                         )
-                    # Drop the readiness entry so we don't re-stitch.
                     self._region_fov_readiness.pop(key, None)
 
     def _on_progress(self, done, queued, message) -> None:
