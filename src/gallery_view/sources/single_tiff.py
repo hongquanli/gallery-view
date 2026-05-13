@@ -4,6 +4,7 @@ Layout: ``<acq>/0/current_0_<z>_<channel_name>.tiff`` — one TIFF per Z slice
 per channel, all in a single FOV directory.
 """
 
+import csv
 import functools
 import glob
 import os
@@ -13,6 +14,7 @@ from typing import Iterator
 import numpy as np
 from tifffile import TiffFile, imread
 
+from ..stitch import FovCoord
 from ..types import Acquisition, Channel, ShapeZYX
 from . import _squid_common as common
 
@@ -50,6 +52,12 @@ def parse_legacy_filename(name: str) -> dict | None:
     return m.groupdict()
 
 
+def _fov_sort_key(coord) -> tuple:
+    """Natural sort key for FovCoord composites: '0_2' < '0_10' < '1_0'."""
+    parts = coord.fov.split("_")
+    return tuple(int(p) if p.isdigit() else p for p in parts)
+
+
 class SingleTiffHandler:
     name = "single_tiff"
 
@@ -71,6 +79,7 @@ class SingleTiffHandler:
             channels = self._channels_from_filenames(folder, layout, timepoints[0])
         if not channels:
             return None
+        regions = self._regions_from_fovs(fovs)
         folder_name = os.path.basename(folder)
         return Acquisition(
             handler=self,
@@ -83,6 +92,8 @@ class SingleTiffHandler:
             selected_fov=fovs[0],
             timepoints=timepoints,
             selected_timepoint=timepoints[0],
+            regions=regions,
+            selected_region=regions[0],
             extra={"layout": layout},
         )
 
@@ -103,6 +114,72 @@ class SingleTiffHandler:
         self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> tuple[str, str]:
         return acq.path, f"fov{fov}/t{timepoint}/{channel.name}"
+
+    def cache_key_region(
+        self, acq: Acquisition, region: str, channel: Channel, timepoint: str = "0"
+    ) -> tuple[str, str]:
+        return acq.path, f"region:{region}/t{timepoint}/{channel.name}"
+
+    def load_region_coords(
+        self, acq: Acquisition
+    ) -> dict[str, list[FovCoord]] | None:
+        return self._load_coords(acq)
+
+    def _load_coords(self, acq: Acquisition) -> dict[str, list[FovCoord]] | None:
+        """Parse coordinates.csv into acq.extra['coords_by_region'].
+
+        Looks at ``<acq.path>/<selected_timepoint>/coordinates.csv`` first,
+        then ``<acq.path>/coordinates.csv`` as fallback. Returns the parsed
+        mapping (also stored on ``acq.extra``) or None when missing /
+        malformed. Result is cached on ``acq.extra`` so repeated calls don't
+        re-read the file.
+        """
+        cached = acq.extra.get("coords_by_region")
+        if cached is not None:
+            return cached
+
+        candidates = [
+            os.path.join(acq.path, acq.selected_timepoint, "coordinates.csv"),
+            os.path.join(acq.path, "coordinates.csv"),
+        ]
+        path = next((p for p in candidates if os.path.exists(p)), None)
+        if path is None:
+            return None
+
+        try:
+            with open(path, newline="") as f:
+                reader = csv.DictReader(f)
+                required = {"region", "fov", "x (mm)", "y (mm)"}
+                if not required.issubset(reader.fieldnames or []):
+                    return None
+                # Dedup to one row per (region, fov) — prefer z=0 when present.
+                seen: dict[tuple[str, str], FovCoord] = {}
+                for row in reader:
+                    region = str(row["region"])
+                    fov_idx = str(row["fov"])
+                    key = (region, fov_idx)
+                    if key in seen and row.get("z_level") not in ("0", "0.0"):
+                        continue
+                    try:
+                        x_mm = float(row["x (mm)"])
+                        y_mm = float(row["y (mm)"])
+                    except (TypeError, ValueError):
+                        return None
+                    composite = f"{region}_{fov_idx}"
+                    seen[key] = FovCoord(fov=composite, x_mm=x_mm, y_mm=y_mm)
+        except OSError:
+            return None
+
+        result: dict[str, list[FovCoord]] = {}
+        for (region, _), coord in seen.items():
+            result.setdefault(region, []).append(coord)
+        if not result:
+            return None
+        # Sort each region's coords by composite fov for determinism.
+        for region in result:
+            result[region].sort(key=_fov_sort_key)
+        acq.extra["coords_by_region"] = result
+        return result
 
     def iter_z_slices(
         self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
@@ -252,6 +329,18 @@ class SingleTiffHandler:
             r, f = pair
             return (0 if r.isdigit() else 1, int(r) if r.isdigit() else r, int(f))
         return [f"{r}_{f}" for r, f in sorted(seen, key=sort_key)]
+
+    @staticmethod
+    def _regions_from_fovs(fovs: list[str]) -> list[str]:
+        """Distinct region prefixes from composite '<region>_<fov>' strings,
+        preserving the order established by ``_fovs_for`` (single source of
+        truth — keeps regions and fovs from drifting apart on plates with
+        well-name regions like A1, A2, ...)."""
+        seen: dict[str, None] = {}   # dict for insertion-ordered dedup
+        for fov in fovs:
+            region = fov.split("_", 1)[0] if "_" in fov else "0"
+            seen[region] = None
+        return list(seen)
 
     @staticmethod
     def _channels_from_filenames(

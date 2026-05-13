@@ -21,9 +21,9 @@ from qtpy.QtWidgets import (
 )
 
 from .. import scan
-from ..loader import Job, MipLoader
+from ..loader import Job, MipLoader, RegionStitchJob
 from ..mips import mip_to_rgba
-from ..sources._squid_common import display_fov, parse_timestamp, resolve_mag
+from ..sources._squid_common import display_fov, parse_timestamp, pixel_um_for, resolve_mag
 from ..types import Acquisition, AxisMip
 from .colors import CHANNEL_ORDER, rgb_for
 
@@ -84,7 +84,8 @@ class Source:
 
 @dataclass
 class RowKey:
-    """A row in the gallery: (acq_id, timepoint, fov)."""
+    """A row in the gallery: ``(acq_id, timepoint, unit)`` — ``unit`` is a
+    composite ``<region>_<fov>`` in FOV view and a region id in region view."""
     acq_id: int
     timepoint: str
     fov: str
@@ -98,7 +99,7 @@ class RowWidgets:
     name_lbl: "QLabel"
     thumb_labels: "dict[int, QLabel]"   # ch_idx -> data thumb
     thumb_columns: "dict[str, QLabel]"  # wavelength -> the cell currently rendered (data or placeholder)
-    fov_combo: "QComboBox | None"
+    unit_combo: "QComboBox | None"
     time_combo: "QComboBox | None"
 
 
@@ -129,12 +130,22 @@ class GalleryWindow(QMainWindow):
         self.square_footprint: bool = False
         # (acq_id, timepoint, fov, ch_idx, axis) -> AxisMip
         self.mip_data: dict[tuple[int, str, str, int, str], "AxisMip"] = {}
+        self.view_mode: str = "fov"  # "fov" | "region"
+        self.expanded_region_mode: bool = False
+        # (acq_id, timepoint, region, ch_idx) -> AxisMip for stitched mosaics
+        self.region_mip_data: dict[tuple[int, str, str, int], AxisMip] = {}
+        # (acq_id, timepoint, region) -> set of (ch_idx, fov_id) we've seen,
+        # used to detect "all FOV MIPs ready, time to stitch".
+        self._region_fov_readiness: dict[
+            tuple[int, str, str], set[tuple[int, str]]
+        ] = {}
 
         # Loader thread (long-lived)
         self.loader = MipLoader()
         self.loader.mip_ready.connect(self._on_mip_ready)
         self.loader.progress.connect(self._on_progress)
         self.loader.idle.connect(self._on_idle)
+        self.loader.region_mip_ready.connect(self._on_region_mip_ready)
         self.loader.start()
 
         self._build_ui()
@@ -231,6 +242,32 @@ class GalleryWindow(QMainWindow):
         self.view_axis: str = "z"
 
         row.addSpacing(16)
+        view_lbl = QLabel("View:")
+        view_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        row.addWidget(view_lbl)
+
+        self.view_btn_group = QButtonGroup(self)
+        self.view_btn_group.setExclusive(True)
+        self.view_buttons: dict[str, QPushButton] = {}
+        for mode, label in [("fov", "FOV"), ("region", "Region")]:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setFixedSize(54, 22)
+            btn.setStyleSheet(self._toggle_style())
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setChecked(mode == "fov")
+            btn.clicked.connect(lambda _, m=mode: self._set_view_mode(m))
+            self.view_btn_group.addButton(btn)
+            self.view_buttons[mode] = btn
+            row.addWidget(btn)
+        # Region button starts disabled; _refresh_region_button_enabled enables
+        # it once a source with multi-region data is added.
+        self.view_buttons["region"].setEnabled(False)
+        self.view_buttons["region"].setToolTip(
+            "No source supports region view"
+        )
+
+        row.addSpacing(16)
         size_lbl = QLabel("Thumbnail size:")
         size_lbl.setStyleSheet("color: #888; font-size: 11px;")
         row.addWidget(size_lbl)
@@ -287,6 +324,13 @@ class GalleryWindow(QMainWindow):
         self.expand_action.toggled.connect(self._set_expanded_fov_mode)
         settings_menu.addAction(self.expand_action)
 
+        self.expand_region_action = QAction(
+            "Expand all regions as separate rows", self
+        )
+        self.expand_region_action.setCheckable(True)
+        self.expand_region_action.toggled.connect(self._set_expanded_region_mode)
+        settings_menu.addAction(self.expand_region_action)
+
         settings_menu.addSeparator()
         clear_action = QAction("Clear MIP cache…", self)
         clear_action.triggered.connect(self._on_clear_cache)
@@ -332,6 +376,22 @@ class GalleryWindow(QMainWindow):
         self.expanded_fov_mode = checked
         self._rebuild_rows()
 
+    def _set_expanded_region_mode(self, checked: bool) -> None:
+        self.expanded_region_mode = checked
+        if self.view_mode == "region":
+            self._rebuild_rows()
+            # Eagerly enqueue prereqs for any region that's now visible.
+            for acq_id, acq in enumerate(self.acquisitions):
+                if acq is None or len(acq.regions) <= 1:
+                    continue
+                regions_now_visible = (
+                    acq.regions if self.expanded_region_mode else [acq.selected_region]
+                )
+                for region in regions_now_visible:
+                    self._enqueue_region_prereqs(
+                        acq_id, acq, acq.selected_timepoint, region
+                    )
+
     @staticmethod
     def _toggle_style() -> str:
         return (
@@ -373,6 +433,7 @@ class GalleryWindow(QMainWindow):
         self.sources_panel.show()
         self._sync_sources_panel()
         self._rebuild_mag_filter()
+        self._refresh_region_button_enabled()
         self._rebuild_rows()
         for acq_id, acq in zip(ids, new_acqs):
             self._enqueue_jobs_for_acq(
@@ -388,8 +449,18 @@ class GalleryWindow(QMainWindow):
         for acq_id in target.acq_ids:
             self.acquisitions[acq_id] = None  # type: ignore[assignment]
         self.sources.remove(target)
+        removed_ids = set(target.acq_ids)
+        self.region_mip_data = {
+            k: v for k, v in self.region_mip_data.items()
+            if k[0] not in removed_ids
+        }
+        self._region_fov_readiness = {
+            k: v for k, v in self._region_fov_readiness.items()
+            if k[0] not in removed_ids
+        }
         self._sync_sources_panel()
         self._rebuild_mag_filter()
+        self._refresh_region_button_enabled()
         self._rebuild_rows()
         if not self.sources:
             self.empty_overlay.show()
@@ -465,10 +536,10 @@ class GalleryWindow(QMainWindow):
             if grp_idx >= len(self.source_groups):
                 continue
             any_visible = any(
-                row_visible.get((acq_id, self.acquisitions[acq_id].selected_timepoint, fov), False)
+                row_visible.get((acq_id, self.acquisitions[acq_id].selected_timepoint, unit), False)
                 for acq_id in src.acq_ids
                 if self.acquisitions[acq_id] is not None
-                for fov in self._fovs_for_row(acq_id)
+                for unit in self._row_units_for(acq_id)
             )
             self.source_groups[grp_idx].setVisible(any_visible)
 
@@ -477,6 +548,9 @@ class GalleryWindow(QMainWindow):
         # rows reappear, replace the "all hidden" message rather than leave
         # it stale on the status bar.
         total_rows = len(self.row_widgets)
+        unit_label = "regions" if self.view_mode == "region" else (
+            "FOVs" if self.expanded_fov_mode else "acquisitions"
+        )
         if total_rows and total_visible == 0:
             reasons = []
             if hide_thin:
@@ -485,17 +559,24 @@ class GalleryWindow(QMainWindow):
                 reasons.append("no magnification selected")
             why = " and ".join(reasons) if reasons else "filters"
             self.status.setText(
-                f"All {total_rows} rows hidden by {why}."
+                f"All {total_rows} {unit_label} hidden by {why}."
             )
         elif total_rows:
             self.status.setText(
-                f"{total_visible}/{total_rows} acquisitions visible"
+                f"{total_visible}/{total_rows} {unit_label} visible"
             )
 
-    def _fovs_for_row(self, acq_id: int) -> list[str]:
+    def _row_units_for(self, acq_id: int) -> list[str]:
+        """Return the row-unit ids for this acquisition under the current view.
+
+        FOV view: one or all FOVs (composite ``<region>_<fov>``).
+        Region view: one or all regions.
+        """
         acq = self.acquisitions[acq_id]
         if acq is None:
             return []
+        if self.view_mode == "region":
+            return acq.regions if self.expanded_region_mode else [acq.selected_region]
         return acq.fovs if self.expanded_fov_mode else [acq.selected_fov]
 
     # ── row rendering ──
@@ -558,11 +639,11 @@ class GalleryWindow(QMainWindow):
             if acq is None:
                 continue
             t = acq.selected_timepoint
-            for fov in self._fovs_for_row(acq_id):
-                key = RowKey(acq_id, t, fov)
+            for unit in self._row_units_for(acq_id):
+                key = RowKey(acq_id, t, unit)
                 self.row_keys.append(key)
                 row = self._make_row_widget(key, acq, active_wls)
-                self.row_widgets[(acq_id, t, fov)] = row
+                self.row_widgets[(acq_id, t, unit)] = row
                 group_layout.addWidget(row.container)
 
         return group
@@ -591,6 +672,9 @@ class GalleryWindow(QMainWindow):
         h.setContentsMargins(4, 2, 4, 2)
         h.setSpacing(4)
 
+        unit = key.fov  # in region view, this is the region id
+        is_region_view = self.view_mode == "region"
+
         mag = resolve_mag(acq.folder_name, acq.params) or "?"
         mag_lbl = QLabel(f"{mag}x" if isinstance(mag, int) else str(mag))
         mag_lbl.setFixedWidth(30)
@@ -604,11 +688,15 @@ class GalleryWindow(QMainWindow):
         time_lbl.setStyleSheet("color: #888; font-size: 9px;")
         h.addWidget(time_lbl)
 
-        if self.expanded_fov_mode and len(acq.fovs) > 1:
-            fov_lbl = QLabel(f"FOV {display_fov(key.fov)}")
-            fov_lbl.setFixedWidth(50)
-            fov_lbl.setStyleSheet("color: #888; font-size: 10px;")
-            h.addWidget(fov_lbl)
+        # Per-row unit label (visible in expanded mode for either view).
+        expanded = self.expanded_region_mode if is_region_view else self.expanded_fov_mode
+        nunits = len(acq.regions if is_region_view else acq.fovs)
+        if expanded and nunits > 1:
+            label = f"Region {unit}" if is_region_view else f"FOV {display_fov(unit)}"
+            unit_lbl = QLabel(label)
+            unit_lbl.setFixedWidth(60)
+            unit_lbl.setStyleSheet("color: #888; font-size: 10px;")
+            h.addWidget(unit_lbl)
 
         # Compact name column — analogous to the explorer's "device" column.
         # Multi-line wrap so the layout stays tight; full path in tooltip.
@@ -654,7 +742,7 @@ class GalleryWindow(QMainWindow):
 
         h.addStretch()
 
-        # Time picker (only for multi-timepoint acquisitions)
+        # Time picker (only for multi-timepoint acquisitions; both views use it).
         time_combo: QComboBox | None = None
         if len(acq.timepoints) > 1:
             time_combo = QComboBox()
@@ -668,34 +756,51 @@ class GalleryWindow(QMainWindow):
             )
             h.addWidget(time_combo)
 
-        # FOV picker (default mode only)
-        fov_combo: QComboBox | None = None
-        if not self.expanded_fov_mode and len(acq.fovs) > 1:
-            fov_combo = QComboBox()
-            _style_combo(fov_combo)
-            for fov in acq.fovs:
-                fov_combo.addItem(f"FOV {display_fov(fov)}", fov)
-            _size_combo_to_contents(fov_combo)
-            fov_combo.setCurrentIndex(acq.fovs.index(acq.selected_fov))
-            fov_combo.currentIndexChanged.connect(
-                lambda i, k=key, c=fov_combo: self._on_fov_changed(k, c.itemData(i))
-            )
-            h.addWidget(fov_combo)
+        # Unit picker (FOV combo in FOV view, Region combo in region view).
+        unit_combo: QComboBox | None = None
+        if not expanded:
+            if is_region_view and len(acq.regions) > 1:
+                unit_combo = QComboBox()
+                _style_combo(unit_combo)
+                for r in acq.regions:
+                    unit_combo.addItem(f"Region {r}", r)
+                _size_combo_to_contents(unit_combo)
+                unit_combo.setCurrentIndex(acq.regions.index(acq.selected_region))
+                unit_combo.currentIndexChanged.connect(
+                    lambda i, k=key, c=unit_combo: self._on_region_changed(
+                        k, c.itemData(i)
+                    )
+                )
+                h.addWidget(unit_combo)
+            elif (not is_region_view) and len(acq.fovs) > 1:
+                unit_combo = QComboBox()
+                _style_combo(unit_combo)
+                for fov in acq.fovs:
+                    unit_combo.addItem(f"FOV {display_fov(fov)}", fov)
+                _size_combo_to_contents(unit_combo)
+                unit_combo.setCurrentIndex(acq.fovs.index(acq.selected_fov))
+                unit_combo.currentIndexChanged.connect(
+                    lambda i, k=key, c=unit_combo: self._on_fov_changed(
+                        k, c.itemData(i)
+                    )
+                )
+                h.addWidget(unit_combo)
 
         # Action buttons — vertical stack to match explorer layout.
+        # 'Open 3D View' is suppressed in region view (stitched mosaics are 2D).
         btn_col = QVBoxLayout()
         btn_col.setSpacing(2)
-
-        btn_3d = QPushButton("Open 3D View")
-        btn_3d.setFixedSize(120, 30)
-        btn_3d.setCursor(Qt.PointingHandCursor)
-        btn_3d.setStyleSheet(
-            "QPushButton { background-color: #2d5aa0; color: white; border-radius: 4px;"
-            " font-size: 11px; font-weight: bold; }"
-            "QPushButton:hover { background-color: #3a6fc0; }"
-        )
-        btn_3d.clicked.connect(lambda _, k=key: self._open_napari(k))
-        btn_col.addWidget(btn_3d)
+        if not is_region_view:
+            btn_3d = QPushButton("Open 3D View")
+            btn_3d.setFixedSize(120, 30)
+            btn_3d.setCursor(Qt.PointingHandCursor)
+            btn_3d.setStyleSheet(
+                "QPushButton { background-color: #2d5aa0; color: white; border-radius: 4px;"
+                " font-size: 11px; font-weight: bold; }"
+                "QPushButton:hover { background-color: #3a6fc0; }"
+            )
+            btn_3d.clicked.connect(lambda _, k=key: self._open_napari(k))
+            btn_col.addWidget(btn_3d)
 
         btn_lut = QPushButton("Adjust Contrast")
         btn_lut.setFixedSize(120, 30)
@@ -717,7 +822,7 @@ class GalleryWindow(QMainWindow):
             name_lbl=name_lbl,
             thumb_labels=thumb_labels,
             thumb_columns=thumb_columns,
-            fov_combo=fov_combo,
+            unit_combo=unit_combo,
             time_combo=time_combo,
         )
 
@@ -731,15 +836,126 @@ class GalleryWindow(QMainWindow):
             key.acq_id, acq, acq.selected_timepoint, new_fov
         )
 
+    def _on_region_changed(self, key, new_region: str) -> None:
+        acq = self.acquisitions[key.acq_id]
+        acq.selected_region = new_region
+        self._rebuild_rows()
+        # Region view eagerly enqueues per-FOV MIPs for all FOVs in the
+        # selected region; readiness is tracked in _region_fov_readiness.
+        if self.view_mode == "region":
+            self._enqueue_region_prereqs(
+                key.acq_id, acq, acq.selected_timepoint, new_region
+            )
+
+    def _enqueue_region_prereqs(
+        self, acq_id: int, acq, timepoint: str, region: str
+    ) -> None:
+        """For region view: enqueue per-FOV Z-MIP jobs for every FOV in
+        ``region``, and register a readiness set we tick off as
+        ``_on_mip_ready`` lands MIPs. When the set is complete we enqueue
+        a ``RegionStitchJob`` per channel.
+
+        Cache hits short-circuit through the loader as usual; this method is
+        cheap to call repeatedly.
+        """
+        # FOVs in this region (composite '<region>_<fov>' filter on acq.fovs).
+        fovs_in_region = [f for f in acq.fovs if f.split("_", 1)[0] == region]
+        if not fovs_in_region:
+            return
+        key = (acq_id, timepoint, region)
+        needed: set[tuple[int, str]] = set()
+        for ch_idx in range(len(acq.channels)):
+            for fov in fovs_in_region:
+                needed.add((ch_idx, fov))
+        self._region_fov_readiness[key] = needed.copy()
+        # Track what's already in mip_data so the stitch trigger doesn't wait
+        # for jobs that already completed before we switched modes.
+        already = {
+            (ci, f) for (ci, f) in needed
+            if (acq_id, timepoint, f, ci, "z") in self.mip_data
+        }
+        self._region_fov_readiness[key] -= already
+
+        # Enqueue any missing FOV jobs (loader skips cached ones in O(1)).
+        for ch_idx, channel in enumerate(acq.channels):
+            for fov in fovs_in_region:
+                if (ch_idx, fov) in already:
+                    continue
+                self.loader.enqueue(Job(
+                    acq_id=acq_id, acq=acq, fov=fov, channel=channel,
+                    ch_idx=ch_idx, timepoint=timepoint,
+                ))
+
+        # If all FOV MIPs were already in memory, fire stitches immediately.
+        if not self._region_fov_readiness[key]:
+            by_ch = self._collect_fov_mips_by_channel(acq_id, timepoint, region)
+            coords_map = acq.handler.load_region_coords(acq)
+            coords = (coords_map or {}).get(region, [])
+            for ch_idx, channel in enumerate(acq.channels):
+                self._dispatch_region_stitch(
+                    acq_id, acq, timepoint, region, ch_idx, channel,
+                    fov_mips=by_ch.get(ch_idx, {}), coords=coords,
+                )
+
+    def _collect_fov_mips_by_channel(
+        self, acq_id: int, timepoint: str, region: str,
+    ) -> "dict[int, dict[str, object]]":
+        """One pass over mip_data: gather every (ch_idx -> fov -> MIP) for the
+        given region's FOVs. Returned dict's outer key is ch_idx."""
+        out: dict[int, dict] = {}
+        for (a, t, f, ci, ax), entry in self.mip_data.items():
+            if (a, t, ax) != (acq_id, timepoint, "z"):
+                continue
+            if f.split("_", 1)[0] != region:
+                continue
+            out.setdefault(ci, {})[f] = entry.mip
+        return out
+
+    def _dispatch_region_stitch(
+        self, acq_id: int, acq, timepoint: str, region: str,
+        ch_idx: int, channel,
+        fov_mips: "dict[str, object]",
+        coords: list,
+    ) -> None:
+        if not coords:
+            self.status.setText(
+                f"{acq.display_name}: region view needs coordinates.csv"
+            )
+            return
+        if not fov_mips:
+            return
+        self.loader.enqueue_region(RegionStitchJob(
+            acq_id=acq_id, acq=acq, region=region,
+            channel=channel, ch_idx=ch_idx, timepoint=timepoint,
+            fov_mips=fov_mips, coords=coords,
+        ))
+
+    def _on_region_mip_ready(
+        self, acq_id, timepoint, region, ch_idx, wavelength, ax_mip,
+    ) -> None:
+        if acq_id >= len(self.acquisitions) or self.acquisitions[acq_id] is None:
+            return
+        self.region_mip_data[(acq_id, timepoint, region, ch_idx)] = ax_mip
+        if self.view_mode == "region":
+            self._render_region_thumb(acq_id, timepoint, region, ch_idx, ax_mip)
+
     def _on_timepoint_changed(self, key, new_timepoint: str) -> None:
         acq = self.acquisitions[key.acq_id]
         acq.selected_timepoint = new_timepoint
-        # Re-key the row widget; rows are cheap, rebuild.
         self._rebuild_rows()
-        # Enqueue jobs for the new (timepoint, fov)'s channels.
-        self._enqueue_jobs_for_acq(
-            key.acq_id, acq, new_timepoint, acq.selected_fov
-        )
+        if self.view_mode == "region":
+            regions_to_load = (
+                acq.regions if self.expanded_region_mode
+                else [acq.selected_region]
+            )
+            for region in regions_to_load:
+                self._enqueue_region_prereqs(
+                    key.acq_id, acq, new_timepoint, region
+                )
+        else:
+            self._enqueue_jobs_for_acq(
+                key.acq_id, acq, new_timepoint, acq.selected_fov
+            )
 
     # ── physical aspect and label sizing ──
 
@@ -748,9 +964,7 @@ class GalleryWindow(QMainWindow):
         acq = self.acquisitions[acq_id]
         if acq is None:
             return 1.0
-        sensor_pixel_um = acq.params.get("sensor_pixel_size_um", 6.5)
-        mag = resolve_mag(acq.folder_name, acq.params) or 1
-        pixel_um = sensor_pixel_um / mag if mag else sensor_pixel_um
+        pixel_um = pixel_um_for(acq.folder_name, acq.params)
         dz_um = acq.params.get("dz(um)", pixel_um)
         shape = acq.shape_zyx
         if shape is None:
@@ -770,20 +984,20 @@ class GalleryWindow(QMainWindow):
         aspect = self._phys_aspect(acq_id, fov, self.view_axis)
         return self.thumb_size, max(20, int(round(self.thumb_size * aspect)))
 
-    def _image_render_size(
-        self, acq_id, fov, cell_w: int, cell_h: int
-    ) -> tuple[int, int]:
-        """Pixmap size that fits in the cell while preserving physical aspect.
-
-        In non-square mode the cell already matches physical aspect so this
-        returns ``(cell_w, cell_h)``. In square_footprint mode it returns a
-        letterboxed size; the QLabel's center alignment fills the rest.
-        """
-        aspect = self._phys_aspect(acq_id, fov, self.view_axis)
+    @staticmethod
+    def _letterbox(aspect: float, cell_w: int, cell_h: int) -> tuple[int, int]:
+        """Fit an image of given aspect (height/width) inside a cell while
+        preserving aspect. Returns ``(img_w, img_h)``."""
         cell_aspect = cell_h / max(cell_w, 1)
         if cell_aspect >= aspect:
             return cell_w, max(1, int(round(cell_w * aspect)))
         return max(1, int(round(cell_h / max(aspect, 1e-9)))), cell_h
+
+    def _image_render_size(
+        self, acq_id, fov, cell_w: int, cell_h: int
+    ) -> tuple[int, int]:
+        """Pixmap size that fits in the cell while preserving physical aspect."""
+        return self._letterbox(self._phys_aspect(acq_id, fov, self.view_axis), cell_w, cell_h)
 
     def _apply_label_sizes(self) -> None:
         for (acq_id, timepoint, fov), rw in self.row_widgets.items():
@@ -819,6 +1033,28 @@ class GalleryWindow(QMainWindow):
             "background-color: #111; border: 1px solid #2a2a2a; border-radius: 3px;"
         )
 
+    def _render_region_thumb(
+        self, acq_id, timepoint, region, ch_idx, ax_mip
+    ) -> None:
+        rw = self.row_widgets.get((acq_id, timepoint, region))
+        if rw is None or ch_idx not in rw.thumb_labels:
+            return
+        acq = self.acquisitions[acq_id]
+        wl = acq.channels[ch_idx].wavelength
+        rgba = mip_to_rgba(ax_mip.mip, ax_mip.p1, ax_mip.p999, rgb_for(wl))
+        h, w = rgba.shape[:2]
+        qimg = QImage(rgba.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
+        # Region thumbs scale to fit the cell, preserving the mosaic aspect.
+        cell = self.thumb_size
+        img_w, img_h = self._letterbox(h / max(w, 1), cell, cell)
+        pixmap = QPixmap.fromImage(qimg).scaled(
+            img_w, img_h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation
+        )
+        rw.thumb_labels[ch_idx].setPixmap(pixmap)
+        rw.thumb_labels[ch_idx].setStyleSheet(
+            "background-color: #111; border: 1px solid #2a2a2a; border-radius: 3px;"
+        )
+
     # ── loader callbacks ──
 
     def _on_mip_ready(
@@ -832,13 +1068,33 @@ class GalleryWindow(QMainWindow):
             acq.shape_zyx = shape
         for axis, ax_mip in channel_mips.items():
             self.mip_data[(acq_id, timepoint, fov, ch_idx, axis)] = ax_mip
-        if self.view_axis in channel_mips:
+        if self.view_axis in channel_mips and self.view_mode == "fov":
             self._render_thumb(
                 acq_id, timepoint, fov, ch_idx, channel_mips[self.view_axis]
             )
         # Aspect may have become known for this row; resize only this row.
         if shape_was_unknown and acq.shape_zyx is not None:
             self._apply_label_sizes_for(acq_id, timepoint, fov)
+
+        # Region-view readiness: tick this (ch_idx, fov) off the pending set;
+        # if the set is now empty, enqueue a stitch.
+        if self.view_mode == "region" and "z" in channel_mips:
+            region = fov.split("_", 1)[0] if "_" in fov else "0"
+            key = (acq_id, timepoint, region)
+            pending = self._region_fov_readiness.get(key)
+            if pending is not None:
+                pending.discard((ch_idx, fov))
+                if not pending:
+                    # All FOV MIPs for this region are in — stitch every channel.
+                    by_ch = self._collect_fov_mips_by_channel(acq_id, timepoint, region)
+                    coords_map = acq.handler.load_region_coords(acq)
+                    coords = (coords_map or {}).get(region, [])
+                    for ci, channel in enumerate(acq.channels):
+                        self._dispatch_region_stitch(
+                            acq_id, acq, timepoint, region, ci, channel,
+                            fov_mips=by_ch.get(ci, {}), coords=coords,
+                        )
+                    self._region_fov_readiness.pop(key, None)
 
     def _on_progress(self, done, queued, message) -> None:
         self.status.setText(f"{done}/{queued} channels — {message}")
@@ -858,6 +1114,54 @@ class GalleryWindow(QMainWindow):
             if ax != axis:
                 continue
             self._render_thumb(acq_id, t, fov, ch_idx, ax_mip)
+
+    def _set_view_mode(self, mode: str) -> None:
+        if mode == self.view_mode:
+            return
+        self.view_mode = mode
+        # XZ/YZ stitched MIPs aren't supported; force XY in region view.
+        if mode == "region":
+            if self.view_axis != "z":
+                self.view_axis = "z"
+                self.axis_buttons["z"].setChecked(True)
+            self.axis_buttons["y"].setEnabled(False)
+            self.axis_buttons["x"].setEnabled(False)
+        else:
+            self.axis_buttons["y"].setEnabled(True)
+            self.axis_buttons["x"].setEnabled(True)
+        self._rebuild_rows()
+        if mode == "region":
+            for acq_id, acq in enumerate(self.acquisitions):
+                if acq is None:
+                    continue
+                for region in (
+                    acq.regions if self.expanded_region_mode else [acq.selected_region]
+                ):
+                    self._enqueue_region_prereqs(
+                        acq_id, acq, acq.selected_timepoint, region
+                    )
+            # Render any cached region thumbs we already have data for.
+            for (acq_id, t, region, ch_idx), ax_mip in self.region_mip_data.items():
+                self._render_region_thumb(acq_id, t, region, ch_idx, ax_mip)
+
+    def _refresh_region_button_enabled(self) -> None:
+        """Region button is enabled iff at least one loaded acquisition has
+        more than one region."""
+        any_multi_region = any(
+            acq is not None and len(acq.regions) > 1
+            for acq in self.acquisitions
+        )
+        self.view_buttons["region"].setEnabled(any_multi_region)
+        if any_multi_region:
+            self.view_buttons["region"].setToolTip("")
+        else:
+            self.view_buttons["region"].setToolTip(
+                "No source supports region view"
+            )
+            if self.view_mode == "region":
+                # Source removed; fall back to FOV view.
+                self.view_buttons["fov"].setChecked(True)
+                self._set_view_mode("fov")
 
     def _set_thumb_size(self, size: int) -> None:
         self.thumb_size = size
@@ -887,20 +1191,42 @@ class GalleryWindow(QMainWindow):
         from .lut_dialog import show_lut_dialog
 
         acq = self.acquisitions[key.acq_id]
+        is_region = self.view_mode == "region"
 
-        def refresh(acq_id, timepoint, fov, ch_idx, ax_mip):
-            self._render_thumb(acq_id, timepoint, fov, ch_idx, ax_mip)
+        if is_region:
+            mip_data = {
+                (a, t, u, ci, "z"): ax_mip
+                for (a, t, u, ci), ax_mip in self.region_mip_data.items()
+            }
+            key_fn = lambda a, u, c, t: a.handler.cache_key_region(
+                a, u, c, timepoint=t
+            )
+            unit_label = "Region"
+            refresh = self._render_region_thumb
+        else:
+            mip_data = self.mip_data
+            key_fn = None
+            unit_label = "FOV"
+            refresh = self._render_thumb
 
         show_lut_dialog(
             parent=self,
             acq=acq,
-            fov=key.fov,
+            unit=key.fov,
             timepoint=key.timepoint,
             axis=self.view_axis,
-            mip_data=self.mip_data,
+            mip_data=mip_data,
             refresh_thumb=refresh,
             acq_id=key.acq_id,
+            key_fn=key_fn,
+            unit_label=unit_label,
         )
+
+        # In region view, mip_data was a local copy; push p1/p999 changes
+        # back to self.region_mip_data so the next thumb render picks them up.
+        if is_region:
+            for (a, t, u, ci, _), ax_mip in mip_data.items():
+                self.region_mip_data[(a, t, u, ci)] = ax_mip
 
     # ── shutdown ──
 

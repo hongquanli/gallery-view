@@ -65,6 +65,16 @@ class OmeTiffHandler:
     ) -> tuple[str, str]:
         return acq.extra["ome_path"], f"fov{fov}/t{timepoint}/wl_{channel.wavelength}"
 
+    def cache_key_region(
+        self, acq: Acquisition, region: str, channel: Channel, timepoint: str = "0"
+    ) -> tuple[str, str]:
+        raise NotImplementedError(
+            "OmeTiffHandler does not support region view"
+        )
+
+    def load_region_coords(self, acq: Acquisition) -> "dict[str, list] | None":
+        return None
+
     def iter_z_slices(
         self, acq: Acquisition, fov: str, channel: Channel, timepoint: str = "0"
     ) -> Iterator[np.ndarray]:

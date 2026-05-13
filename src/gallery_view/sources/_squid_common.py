@@ -127,6 +127,18 @@ def parse_timestamp(folder_name: str) -> tuple[str, str] | None:
     return f"{m.group(2)}-{m.group(3)}", f"{m.group(4)}:{m.group(5)}"
 
 
+def pixel_um_for(folder_name: str, params: dict | None) -> float:
+    """In-plane pixel size in micrometres = sensor_pixel_size_um / mag.
+
+    Falls back to ``sensor_pixel_size_um = 6.5`` and ``mag = 1`` when either
+    is missing, matching the assumptions in the gallery's existing aspect
+    math.
+    """
+    sensor = (params or {}).get("sensor_pixel_size_um", 6.5)
+    mag = resolve_mag(folder_name, params) or 1
+    return sensor / max(mag, 1)
+
+
 def resolve_mag(folder_name: str, params: dict | None) -> int | None:
     """Best-effort magnification lookup.
 

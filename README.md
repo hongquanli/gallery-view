@@ -26,6 +26,13 @@ open in a 3D napari viewer for closer inspection.
   per-row FOV picker (or "Expand all FOVs as separate rows" via the
   Settings menu); multi-timepoint acquisitions expose a per-row Time
   picker that switches the displayed timepoint without reloading.
+- **Region view** — multi-region squid acquisitions can be viewed as
+  per-well stitched XY MIPs via the *View: [FOV] [Region]* toolbar toggle.
+  Each region's MIP is a coordinate-based mosaic built from the per-FOV
+  Z-MIPs the gallery already caches and `coordinates.csv`; FOVs are
+  placed by stage position and overlaps are mean-blended. Use
+  *Settings → Expand all regions as separate rows* to see every region
+  at once. Requires `single_tiff` (squid) format with `coordinates.csv`.
 - **Multiple sources** — drag folders onto the window or pass `--source PATH`
   on the command line; sources can be acquisition folders or parents
   containing many.

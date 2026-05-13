@@ -203,7 +203,11 @@ def make_squid_single_tiff_acq(tmp_path):
     """Build an acquisition in squid's per-image TIFF layout.
 
     ``<acq>/<t>/[<well>_]<region>_<fov>_<z>_<channel>.tiff``
+
+    Optionally writes ``coordinates.csv`` with stage positions laid out as a
+    deterministic grid — used by region-view tests.
     """
+    import csv
 
     def _build(
         wavelengths=("488", "561"),
@@ -219,6 +223,8 @@ def make_squid_single_tiff_acq(tmp_path):
         sensor_pixel_size_um=6.5,
         dz_um=2.0,
         mag=25,
+        write_coords=False,
+        coord_grid_um=(800.0, 600.0),  # (dx, dy) between FOV centers
     ) -> Path:
         folder = tmp_path / folder_name
         folder.mkdir()
@@ -236,12 +242,12 @@ def make_squid_single_tiff_acq(tmp_path):
             for i, wl in enumerate(wavelengths)
         ])
         prefix = f"{well}_" if with_well_prefix else ""
+        dx_um, dy_um = coord_grid_um
         for t in range(nt):
             t_dir = folder / str(t)
             t_dir.mkdir()
             for r in range(regions):
                 for f in range(fovs_per_region):
-                    stack = _gradient_3d(nz, ny, nx, 0)
                     for z in range(nz):
                         for c, wl in enumerate(wavelengths):
                             ch_stack = _gradient_3d(nz, ny, nx, c)
@@ -249,6 +255,22 @@ def make_squid_single_tiff_acq(tmp_path):
                                 t_dir / f"{prefix}{r}_{f}_{z}_Fluorescence_{wl}_nm_Ex.tiff",
                                 ch_stack[z],
                             )
+            if write_coords:
+                coords_path = t_dir / "coordinates.csv"
+                with coords_path.open("w", newline="") as fh:
+                    w = csv.writer(fh)
+                    w.writerow(["region", "fov", "z_level", "x (mm)", "y (mm)", "z (um)", "time"])
+                    for r in range(regions):
+                        for f in range(fovs_per_region):
+                            x_mm = (f * dx_um) / 1000.0
+                            y_mm = (r * dy_um) / 1000.0
+                            for z in range(nz):
+                                z_um = 3000.0 + z * dz_um
+                                w.writerow([
+                                    str(r), str(f), str(z),
+                                    f"{x_mm:.6f}", f"{y_mm:.6f}",
+                                    f"{z_um:.6f}", f"t{t}_z{z}",
+                                ])
         return folder
 
     return _build

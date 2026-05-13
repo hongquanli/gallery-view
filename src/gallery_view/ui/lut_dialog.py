@@ -23,7 +23,7 @@ from qtpy.QtWidgets import (
 from .. import cache
 from ..mips import mip_to_rgba
 from ..sources._squid_common import display_fov, resolve_mag
-from ..types import Acquisition, AxisMip
+from ..types import Acquisition, AxisMip, Channel
 from .colors import rgb_for
 from .zoomable_view import ZoomableImageView
 
@@ -35,22 +35,28 @@ EXPORT_DPI = 600
 def show_lut_dialog(
     parent,
     acq: Acquisition,
-    fov: str,
+    unit: str,
     timepoint: str,
     axis: str,
     mip_data: dict,
     refresh_thumb: Callable[[int, str, str, int, AxisMip], None],
     acq_id: int,
+    key_fn: Callable[[Acquisition, str, Channel, str], tuple[str, str]] | None = None,
+    unit_label: str = "FOV",
 ) -> None:
     """Open the LUT dialog. ``mip_data`` is the gallery window's
-    ``{(acq_id, timepoint, fov, ch_idx, axis): AxisMip}`` map; we mutate
-    it in place. ``refresh_thumb(acq_id, timepoint, fov, ch_idx, ax_mip)``
-    is called whenever a channel's LUT changes so the gallery thumbnail
-    re-renders."""
+    ``{(acq_id, timepoint, unit, ch_idx, axis): AxisMip}`` map; we mutate
+    it in place. ``unit`` is the row's third-slot id (a composite fov in
+    FOV view, a region in region view). ``key_fn`` produces the
+    ``(src, ch_id)`` tuple for cache writes — defaults to
+    ``acq.handler.cache_key`` so FOV callers don't need to change.
+    """
+    if key_fn is None:
+        key_fn = lambda a, u, c, t: a.handler.cache_key(a, u, c, timepoint=t)
 
     ch_keys = sorted(
         ci for (a, t, f, ci, ax) in mip_data
-        if a == acq_id and t == timepoint and f == fov and ax == axis
+        if a == acq_id and t == timepoint and f == unit and ax == axis
     )
     if not ch_keys:
         return
@@ -59,14 +65,15 @@ def show_lut_dialog(
     snapshot: dict[tuple[int, str, str, int, str], tuple[float, float]] = {}
     for ci in ch_keys:
         for ax in AXES:
-            entry = mip_data.get((acq_id, timepoint, fov, ci, ax))
+            entry = mip_data.get((acq_id, timepoint, unit, ci, ax))
             if entry is not None:
-                snapshot[(acq_id, timepoint, fov, ci, ax)] = (entry.p1, entry.p999)
+                snapshot[(acq_id, timepoint, unit, ci, ax)] = (entry.p1, entry.p999)
 
     dlg = QDialog(parent)
     mag = resolve_mag(acq.folder_name, acq.params) or "?"
+    title_unit = display_fov(unit) if unit_label == "FOV" else unit
     dlg.setWindowTitle(
-        f"LUT — {acq.display_name} | {mag}x | FOV {display_fov(fov)} | {axis_label}"
+        f"LUT — {acq.display_name} | {mag}x | {unit_label} {title_unit} | {axis_label}"
     )
     dlg.setStyleSheet("background-color: #1e1e1e; color: white;")
 
@@ -78,7 +85,7 @@ def show_lut_dialog(
             mip_data[k] = AxisMip(mip=entry.mip, p1=p1, p999=p999)
             _, _, _, ch_idx, ax = k
             if ax == axis:
-                refresh_thumb(acq_id, timepoint, fov, ch_idx, mip_data[k])
+                refresh_thumb(acq_id, timepoint, unit, ch_idx, mip_data[k])
 
     dlg.rejected.connect(revert_unsaved)
 
@@ -97,7 +104,7 @@ def show_lut_dialog(
     min_slider_targets: list[tuple[QSlider, int]] = []
 
     for ch_idx in ch_keys:
-        ax_mip = mip_data[(acq_id, timepoint, fov, ch_idx, axis)]
+        ax_mip = mip_data[(acq_id, timepoint, unit, ch_idx, axis)]
         wl = acq.channels[ch_idx].wavelength
         color = rgb_for(wl)
         data_min, data_max = float(ax_mip.mip.min()), float(ax_mip.mip.max())
@@ -170,14 +177,14 @@ def show_lut_dialog(
                 rfn(float(lo), float(hi))
                 # Apply to all three axes (synchronized)
                 for ax in AXES:
-                    key = (acq_id, timepoint, fov, ci, ax)
+                    key = (acq_id, timepoint, unit, ci, ax)
                     entry = mip_data.get(key)
                     if entry is None:
                         continue
                     mip_data[key] = AxisMip(mip=entry.mip, p1=float(lo), p999=float(hi))
                 refresh_thumb(
-                    acq_id, timepoint, fov, ci,
-                    mip_data[(acq_id, timepoint, fov, ci, axis)],
+                    acq_id, timepoint, unit, ci,
+                    mip_data[(acq_id, timepoint, unit, ci, axis)],
                 )
             return on_change
 
@@ -207,8 +214,8 @@ def show_lut_dialog(
     btn_export.setStyleSheet(btn_min_reset.styleSheet())
     btn_export.clicked.connect(
         lambda: _export_png(
-            dlg, acq, fov, timepoint, axis, axis_label, ch_keys,
-            mip_data, acq_id, dz_um, pixel_um,
+            dlg, acq, unit, timepoint, axis, axis_label, ch_keys,
+            mip_data, acq_id, dz_um, pixel_um, unit_label,
         )
     )
     bottom.addWidget(btn_export)
@@ -225,12 +232,10 @@ def show_lut_dialog(
     def save_all() -> None:
         for ci in ch_keys:
             channel = acq.channels[ci]
-            src, ch_id = acq.handler.cache_key(
-                acq, fov, channel, timepoint=timepoint
-            )
+            src, ch_id = key_fn(acq, unit, channel, timepoint)
             axis_data = {}
             for ax in AXES:
-                entry = mip_data.get((acq_id, timepoint, fov, ci, ax))
+                entry = mip_data.get((acq_id, timepoint, unit, ci, ax))
                 if entry is None:
                     continue
                 axis_data[ax] = (entry.mip, entry.p1, entry.p999)
@@ -250,8 +255,8 @@ def show_lut_dialog(
 
 
 def _export_png(
-    dlg, acq, fov, timepoint, axis, axis_label, ch_keys, mip_data, acq_id,
-    dz_um, pixel_um,
+    dlg, acq, unit, timepoint, axis, axis_label, ch_keys, mip_data, acq_id,
+    dz_um, pixel_um, unit_label="FOV",
 ) -> None:
     try:
         import matplotlib
@@ -268,7 +273,11 @@ def _export_png(
     datetime_str = f"{ts.group(1)} {ts.group(2)}:{ts.group(3)}" if ts else ""
     ts_part = f"_{ts.group(1)}_{ts.group(2)}{ts.group(3)}" if ts else ""
     safe_name = acq.display_name.replace(" ", "_").replace("/", "_")
-    default_name = f"{safe_name}_{axis}_fov{display_fov(fov)}{ts_part}.png"
+    title_unit = display_fov(unit) if unit_label == "FOV" else unit
+    file_unit_tag = (
+        f"fov{display_fov(unit)}" if unit_label == "FOV" else f"region{unit}"
+    )
+    default_name = f"{safe_name}_{axis}_{file_unit_tag}{ts_part}.png"
     path, _ = QFileDialog.getSaveFileName(dlg, "Export view", default_name, "PNG (*.png)")
     if not path:
         return
@@ -289,7 +298,7 @@ def _export_png(
     text_pad_pt = 60 * 72 / EXPORT_DPI
 
     for col_i, ci in enumerate(ch_keys):
-        entry = mip_data.get((acq_id, timepoint, fov, ci, axis))
+        entry = mip_data.get((acq_id, timepoint, unit, ci, axis))
         if entry is None:
             continue
         wl = acq.channels[ci].wavelength
@@ -332,7 +341,7 @@ def _export_png(
         for spine in ax_hist.spines.values():
             spine.set_color("#666")
 
-    title_main = f"{acq.display_name} | FOV {display_fov(fov)} | {axis_label}"
+    title_main = f"{acq.display_name} | {unit_label} {title_unit} | {axis_label}"
     fig.text(0.5, 0.985, title_main, ha="center", va="top", fontsize=13, color="white")
     if datetime_str:
         fig.text(0.5, 0.96, datetime_str, ha="center", va="top", fontsize=11, color="#888")
